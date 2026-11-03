@@ -12,7 +12,7 @@ Your application → SQL → Turso in your process → HTTPS → TiDB Filesystem
 ```
 
 No FUSE mount or local database file is needed. This is an early prototype;
-use one active process per remote database directory.
+each remote database directory supports one writer and multiple snapshot readers.
 
 ## Why use it?
 
@@ -252,7 +252,7 @@ env -u TIDBFS_ENDPOINT -u TIDBFS_TOKEN \
 
 It commits rows, kills the process with an uncommitted transaction open, and
 reopens the database in a fresh process. It also checks integrity, checkpoint
-and reopen, stale-writer rejection, and absence of local database files.
+and reopen, writer exclusion, and absence of local database files.
 Results are written to `output/results.json`.
 
 ## Compare with local disk
@@ -287,7 +287,8 @@ example's directory cannot access those test directories.
 | No local owner token | Use the existing-filesystem instructions in step 3 to generate or import one. |
 | HTTP 401 | Issue a new FS token; the current one may have expired or been revoked. |
 | HTTP 403 | Check that the token permits `read,list,write` for `FS_ROOT`. For scripts, use their CLI-token mode shown above. |
-| HTTP 409 or failed session | Stop the stale process and reopen the database. Check committed state before retrying a failed application operation. |
+| Remote database is busy | The writer lease is held. Close the owner, wait for expiry, or increase `TIDBFS_LOCK_TIMEOUT_MS`. |
+| Failed or expired session / HTTP 409 | Discard the old process and reopen. Check committed state before retrying a failed application operation. |
 
 ## How storage works
 
@@ -299,31 +300,86 @@ A small WAL tail can be stored directly in that manifest. The program uses
 See [storage design](docs/storage.md) for the I/O interfaces, cache, commit
 protocol, and failure behavior.
 
-## Concurrent access
+## One writer, multiple readers
 
-Concurrency depends on whether connections share the same engine instance:
+Independent processes can read the database while one process owns its writer
+lease. Each reader pins the database and WAL together at open time; reopen the
+reader to see later commits.
 
-| Usage | Current behavior |
+In one terminal, start the writer normally:
+
+```bash
+./target/release/turso-fs "$FS_ROOT"
+```
+
+In other terminals, set the same endpoint, token and directory, then open readers:
+
+```bash
+./target/release/turso-fs --read-only "$FS_ROOT"
+?SELECT id,title,status FROM tasks;
+```
+
+A read-only process does not acquire the writer lease or modify remote state.
+It can use a token scoped to `"$FS_ROOT:read,list"`. Readers keep their snapshots
+across writer commits, checkpoints and writer handoffs. They do not refresh
+automatically, and writes through them are rejected.
+
+### Let agents take turns writing
+
+A second writer waits for ownership before opening the engine. A clean exit
+releases the lease immediately. After a crash or loss of connectivity, a new
+process can take over once it has observed an unchanged lease for a full TTL.
+The new owner advances the same manifest revision used for commits, so an old
+process cannot publish against that revision after takeover.
+For short agent tasks, open a writer, commit the batch, then close the process
+to hand ownership to the next agent. A live writer keeps its lease even while idle.
+
+| Setting | Default in the command-line program |
 | --- | --- |
-| Multiple connections from one shared Turso `Database` | Readers can hold snapshots while one write transaction commits. A second write transaction receives `Busy` until the first finishes. |
-| Separate processes or separate `FsIo` instances opening the same directory | Each sees its own manifest snapshot. There is no automatic refresh or remote database lock. A stale writer's publication fails; discard that session and reopen. Use one active session per directory. |
-| Separate databases in separate remote directories | Independent manifests; applications can run them concurrently. |
+| `TIDBFS_LEASE_TTL_MS` | `30000` — confirmed writer lifetime; also the observation window for takeover. |
+| `TIDBFS_HEARTBEAT_MS` | `5000` — renew an idle writer's lease. Commits also renew it. |
+| `TIDBFS_LOCK_TIMEOUT_MS` | `90000` — maximum time to wait for ownership; use `0` to fail immediately when busy. |
 
-The bundled command-line program uses one connection and executes input lines
-sequentially. To use multiple connections in an application, create one `FsIo`
-and one Turso `Database`, then obtain connections with `db.connect()`. The
-adapter uses blocking HTTP and a shared state mutex, so concurrent SQL
-connections do not imply parallel block I/O.
+Heartbeat must be positive and at most one third of TTL. TTL must be between
+100 and 300,000 ms. Shorter values reduce failover time but tolerate less network
+latency or process stalls. Blocking file I/O shares the heartbeat's state mutex;
+choose a TTL that comfortably exceeds the longest I/O operation. Takeover timing
+includes observation, HTTP requests and engine recovery; it is not a fixed SLA.
 
-The connection regression test covers a reader retaining its snapshot across
-a writer's commit, rejection of a second writer, transfer of write ownership,
-and reopening the committed data. This project does not provide multi-process
-shared WAL coordination, distributed write ownership, or concurrent writers
-to the same database.
+An expired session, failed renewal or uncertain publication permanently stops
+that writer. Restoring its network connection does not renew its ownership.
+Discard the old connections and reopen a new instance. A failed commit can have
+an uncertain outcome: query the recovered database before retrying application work.
+
+For embedded use, `FsIo::writer(store, options)` or `FsIo::new(store)` acquires
+ownership; `SessionOptions::default()` fails immediately on contention.
+`FsIo::snapshot(store)` pins a read-only snapshot; open Turso with
+`OpenOptions::new(dialect).flags(OpenFlags::ReadOnly)`. Connections from one
+shared Turso `Database` retain the engine's reader snapshots and single write
+transaction coordination. Close the connections before calling `io.close()`
+to release ownership. The CLI uses one connection and executes lines sequentially.
+The adapter uses blocking HTTP and serializes block I/O within each instance.
+
+### Verify failure and recovery
+
+```bash
+env -u TIDBFS_ENDPOINT -u TIDBFS_TOKEN \
+  python3 handoff.py --fs-id "$FS_ID"
+```
+
+This runs two live scenarios against TiDB Filesystem: cutting the old writer's
+transport through a disposable local proxy, and pausing/resuming the old process
+with `SIGSTOP`/`SIGCONT`. In each case it checks live-owner exclusion, idle
+heartbeats, two independent snapshot readers, takeover, WAL recovery, rejection
+of the restored writer's COMMIT, the successor's continued ownership, and final
+rows and integrity. It uses 12-second TTLs and 2-second heartbeats for the test;
+normal program defaults remain as shown above. Results go to `output/handoff.json`.
+It creates disposable data under `/demos/turso-handoff/` and uses the same CLI
+authentication as the smoke test. See [recorded handoff checks](results/handoff.md).
 
 ## Limits
 
-- One active process per remote database directory; concurrent stale writers fail.
+- One writer per remote database directory, with independent read-only snapshots.
 - 8 MiB per logical file, 8 logical files, and a 48 KiB manifest.
 - HTTP I/O blocks the calling thread. Hosted endpoints require HTTPS.
 - The server must support batch writes, and objects must fit its inline-upload limit.

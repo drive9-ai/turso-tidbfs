@@ -25,6 +25,7 @@ fn server(handlers: Vec<Handler>) -> (HttpStore, thread::JoinHandle<()>) {
                     Err(e) => panic!("test HTTP accept failed: {e}"),
                 }
             };
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
@@ -142,7 +143,7 @@ fn http_partial_batch_failure_never_publishes_manifest() {
         }),
     ]);
     let store = Arc::new(store);
-    let io = FsIo::new(store.clone()).unwrap();
+    let io = FsIo::unlocked_for_test(store.clone()).unwrap();
     let file = io.open_file("agent.db", OpenFlags::Create, false).unwrap();
     let mut bytes = vec![1; BLOCK_SIZE];
     bytes.extend(vec![2; BLOCK_SIZE]);
@@ -206,5 +207,48 @@ fn http_block_batches_respect_item_limits() {
         .collect();
     store.put_blocks(&blocks).unwrap();
     assert_eq!(store.metrics_snapshot().batch_requests, 2);
+    worker.join().unwrap();
+}
+
+#[test]
+fn http_writer_claim_and_release_share_the_manifest() {
+    let (store, worker) = server(vec![
+        Box::new(|request, _| {
+            assert!(request.starts_with("GET /v1/fs/test/manifest.json "));
+            (404, b"{}".to_vec())
+        }),
+        Box::new(|request, body| {
+            assert!(request.starts_with("PUT /v1/fs/test/manifest.json "));
+            assert_eq!(body["format"], MANIFEST_FORMAT);
+            assert_eq!(body["lease"]["ttl_ms"], 30000);
+            assert_eq!(body["lease"]["sequence"], 0);
+            assert_eq!(body["lease"]["owner"].as_str().unwrap().len(), 64);
+            (200, br#"{"revision":1}"#.to_vec())
+        }),
+        Box::new(|request, body| {
+            assert!(request.starts_with("PUT /v1/fs/test/manifest.json "));
+            assert!(
+                body.get("lease").is_none(),
+                "release must clear lease in the same object"
+            );
+            (200, br#"{"revision":2}"#.to_vec())
+        }),
+    ]);
+    let io = FsIo::new(Arc::new(store)).unwrap();
+    io.close().unwrap();
+    assert!(io.ensure_healthy().is_err());
+    worker.join().unwrap();
+}
+
+#[test]
+fn http_manifest_conflict_is_distinct_from_uncertain_failure() {
+    let (store, worker) = server(vec![Box::new(|request, _| {
+        assert!(request.starts_with("PUT /v1/fs/test/manifest.json "));
+        (409, b"{}".to_vec())
+    })]);
+    assert!(matches!(
+        store.put_manifest(b"{}", 1, Instant::now() + Duration::from_secs(5)),
+        Err(LimboError::LockingError(_))
+    ));
     worker.join().unwrap();
 }

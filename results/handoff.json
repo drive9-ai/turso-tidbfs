@@ -1,0 +1,101 @@
+{
+  "binary_sha256": "a564d1d3707639edf6cf7d2ea3d493af063906961663cad98584ab1fca1db878",
+  "recorded_at": "2026-11-03T06:34:13Z",
+  "runs": [
+    {
+      "failure": "network",
+      "root": "/demos/turso-handoff/2569f2f163c549e49929a37713bda6a8",
+      "ttl_ms": 12000,
+      "heartbeat_ms": 2000,
+      "takeover_open_ms": 15927.876,
+      "clean_handoff_open_ms": 2830.321,
+      "checks": [
+        "two independent readers retain snapshots while writer commits",
+        "live idle writer renews beyond TTL; competing writer is rejected",
+        "successor recovers acknowledged WAL and excludes abandoned transaction",
+        "restored old process cannot commit or release successor ownership",
+        "clean release permits immediate handoff; final rows and integrity verified; no local database files"
+      ],
+      "snapshot_readers": 2,
+      "integrity_check": "ok",
+      "local_database_files": 0,
+      "stale_commit_exit_code": 1,
+      "stale_process_error": "turso-fs: Internal error: FS session failed or expired; discard it and reopen from remote state",
+      "final_rows": [
+        [
+          "1",
+          "saved"
+        ],
+        [
+          "2",
+          "saved"
+        ],
+        [
+          "3",
+          "saved"
+        ],
+        [
+          "4",
+          "successor"
+        ],
+        [
+          "5",
+          "successor"
+        ]
+      ],
+      "rows_sha256": "719a630f7385e43e41afe0e97d73a81c9e5069d7d3c74a0c218cf782c9bd2609"
+    },
+    {
+      "failure": "pause",
+      "root": "/demos/turso-handoff/f58f8b7638504ff89c11014454feb3a4",
+      "ttl_ms": 12000,
+      "heartbeat_ms": 2000,
+      "takeover_open_ms": 15136.26,
+      "clean_handoff_open_ms": 2787.998,
+      "checks": [
+        "two independent readers retain snapshots while writer commits",
+        "live idle writer renews beyond TTL; competing writer is rejected",
+        "successor recovers acknowledged WAL and excludes abandoned transaction",
+        "restored old process cannot commit or release successor ownership",
+        "clean release permits immediate handoff; final rows and integrity verified; no local database files"
+      ],
+      "snapshot_readers": 2,
+      "integrity_check": "ok",
+      "local_database_files": 0,
+      "stale_commit_exit_code": 1,
+      "stale_process_error": "turso-fs: Internal error: FS session failed or expired; discard it and reopen from remote state",
+      "final_rows": [
+        [
+          "1",
+          "saved"
+        ],
+        [
+          "2",
+          "saved"
+        ],
+        [
+          "3",
+          "saved"
+        ],
+        [
+          "4",
+          "successor"
+        ],
+        [
+          "5",
+          "successor"
+        ]
+      ],
+      "rows_sha256": "719a630f7385e43e41afe0e97d73a81c9e5069d7d3c74a0c218cf782c9bd2609"
+    }
+  ],
+  "additional_verification": {
+    "binary_sha256": "dd7807d764483f0b10ba2d2e7422531e3e7fc5bfb63c4775c02ee0402d6d5c0e",
+    "read_only_scoped_token": "passed",
+    "final_rows": 5,
+    "integrity_check": "ok",
+    "obsolete_manifest_cas_http_status": 409,
+    "manifest_unchanged": true,
+    "local_database_files": 0
+  }
+}

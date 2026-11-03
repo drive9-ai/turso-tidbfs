@@ -2,7 +2,7 @@
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Instant};
 use turso_core::{Connection, Database, SqliteDialect, StepResult, UnixIO, io::IO};
-use turso_fs::{FsIo, HttpStore};
+use turso_fs::{FsIo, HttpStore, SessionOptions};
 const ROWS: usize = 1024;
 fn query(
     c: &Arc<Connection>,
@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             store.prepare()?;
             (
                 Some(store.clone()),
-                Arc::new(FsIo::new(store)?),
+                Arc::new(FsIo::writer(store, SessionOptions::from_env()?)?),
                 "agent.db".into(),
             )
         }

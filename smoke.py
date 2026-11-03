@@ -43,9 +43,10 @@ def access(args, root):
 
 
 class Session:
-    def __init__(self, binary, root, env):
+    def __init__(self, binary, root, env, readonly=False):
         self.folder = tempfile.TemporaryDirectory(prefix="turso-fs-sandbox-")
-        self.process = subprocess.Popen([str(binary), root], env=env, cwd=self.folder.name,
+        command = [str(binary), *(["--read-only"] if readonly else []), root]
+        self.process = subprocess.Popen(command, env=env, cwd=self.folder.name,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, text=True, bufsize=1)
         self.lines = queue.Queue()
@@ -97,8 +98,9 @@ class Session:
                 self.process.stdin.close()
             self.process.wait(timeout=120)
         self.error_reader.join(timeout=5)
-        assert not list(Path(self.folder.name).iterdir()), "unexpected local database files"
-        self.folder.cleanup()
+        if Path(self.folder.name).exists():
+            assert not list(Path(self.folder.name).iterdir()), "unexpected local database files"
+            self.folder.cleanup()
         if not kill:
             assert self.process.returncode == 0, self.errors
         return self.errors
@@ -142,18 +144,17 @@ def main():
         recovered.sql("PRAGMA wal_checkpoint(TRUNCATE);")
         report["metrics"] += recovered.stop()
 
-        first, stale = start(), start()
-        first.sql("INSERT INTO items VALUES(64,'new');")
+        first = start()
         try:
-            stale.sql("INSERT INTO items VALUES(65,'must not overwrite');")
-        except RuntimeError:
-            assert stale.process.wait(timeout=15) != 0
-            assert any("409" in line for line in stale.errors), stale.errors
+            unexpected = Session(binary, root, {**env, "TIDBFS_LOCK_TIMEOUT_MS": "0"})
+            sessions.append(unexpected)
+        except RuntimeError as exc:
+            assert "remote database is busy" in str(exc), str(exc)
         else:
-            raise AssertionError("stale writer unexpectedly succeeded")
-        stale.stop(kill=True)
+            raise AssertionError("second writer unexpectedly acquired a live lease")
+        first.sql("INSERT INTO items VALUES(64,'new');")
         report["metrics"] += first.stop()
-        report["checks"].append("stale process rejected by remote manifest CAS (HTTP 409)")
+        report["checks"].append("second writer rejected while the remote lease is held")
 
         final = start()
         assert final.sql("?SELECT count(*),sum(id) FROM items") == [["65", "2080"]]

@@ -55,3 +55,6 @@ python3 smoke.py
 ```
 
 [Benchmark data](benchmark.json) · [Recovery verification](recovery.json)
+
+Independent snapshot readers, remote writer leases and failure handoff are
+covered by the [live handoff checks](handoff.md).

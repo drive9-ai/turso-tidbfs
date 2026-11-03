@@ -63,20 +63,76 @@ may already have reached the server: reconcile via SQL before retrying an
 application operation. Unpublished blocks are harmless orphans; there is no
 block garbage collection yet.
 
-Use **one active session per directory**. This is optimistic conflict detection,
-not a distributed lock service. Separate sessions read their own snapshots and
-can make a previous writer's next sync fail. File locks coordinate handles only
-within one adapter session. Connections created from one shared Turso `Database`
-support reader snapshots and one write transaction at a time; a competing writer
-gets `Busy`. Separate `FsIo` instances do not share that coordination, even in
-the same process. Their manifests are loaded once and are not automatically
-refreshed. Use different remote directories for independent databases.
+## Writer lease and takeover
 
-The adapter's shared state mutex serializes file access, including blocking
-HTTP calls. Supporting overlapping SQL transactions is not a claim of parallel
-block transfers. The command-line program uses a single sequential connection.
-Shared multi-process WAL / `.tshm`, remote database locks and session takeover,
-MVCC, partial sync, and Turso Cloud sync are outside this implementation.
+The manifest contains an optional lease: a unique owner, heartbeat sequence and
+TTL in milliseconds. Lease acquisition, renewal, release and file publication
+all conditionally replace **the same manifest object**. There is no separate
+lock file whose expiry can race an unguarded database PUT. Immutable block
+uploads confer no write ownership; only the manifest CAS makes them visible.
 
+- **Acquire:** read and validate the manifest, then CAS a new owner into that
+  revision before opening Turso. Only a definite revision conflict can be
+  re-observed. An uncertain acquisition result is not retried or released.
+- **Renew:** an idle background thread advances the heartbeat sequence. File
+  publication also advances it. The local deadline starts before sending the
+  request. Both the previous deadline and the new lifetime must still be valid
+  when the acknowledgement arrives. A late or unknown acknowledgement cannot
+  revive ownership.
+- **Expire:** the writer checks its monotonic deadline before and after I/O.
+  Renewal or mutation failures poison the session permanently. The CLI also
+  checks health around SQL execution, including queries satisfied from cache.
+- **Take over:** a contender observes the *same owner, sequence and TTL* for a
+  full TTL using its own monotonic clock, re-reading while it waits. A changed
+  heartbeat restarts that observation window. It then CASes a new owner into
+  the observed revision. No wall-clock synchronization is required. A paused
+  contender still has to win that CAS against the latest state.
+- **Fence:** after takeover, any old publication, heartbeat or release carries
+  an obsolete expected revision and is rejected by the server. This includes
+  a request that was already in flight when ownership changed. If the old
+  request wins first, the contender loses CAS and must re-observe; it cannot
+  overwrite the winning update or open Turso as a writer first.
+- **Release:** after closing engine connections, a healthy owner clears its
+  lease using CAS. This permits immediate handoff. A failed or expired owner
+  does not attempt release and cannot clear a successor's ownership. Explicit
+  `FsIo::close()` reports release failures; Drop performs best-effort cleanup.
+
+The command-line program defaults to a 30-second TTL, 5-second heartbeat and
+90-second lock wait. The library's default lock wait is zero. Contenders retain
+no observation history across restarts, so recovery can require a full TTL
+from the first observation, plus network and engine recovery time. No server
+sweeper is needed. The existing conditional FS API and directory-scoped tokens
+are sufficient; this does not use the inode-based extent lock API.
+
+Ownership is an adapter protocol for cooperating clients. It requires atomic
+revision CAS on an unchanged manifest inode and immutable blocks. Other clients
+with write permission must not delete, rename, replace or edit internal storage
+objects, bypass conditional writes, or restore old manifests. It is not mandatory
+access control against arbitrary authorized filesystem clients.
+
+## Independent readers
+
+`FsIo::snapshot` reads one manifest and retains its database/WAL images for the
+reader's entire lifetime. Open the engine read-only. It never acquires or renews
+the writer lease, creates remote directories, publishes files, or checkpoints
+remote data. The adapter rejects writes even if a caller supplies writable open
+flags. Snapshots can coexist with writer commits and takeover because referenced
+blocks remain immutable and inline bytes belong to the captured manifest.
+There is no block garbage collection; any future GC must account for readers.
+
+A reader sees commits in its captured WAL, not changes published after it opened.
+Reopen to refresh. Separate databases must use separate directories because one
+manifest and lease govern the directory as a unit. Connections from one shared
+Turso `Database` still support reader snapshots and one write transaction at a
+time; a competing transaction receives `Busy`.
+
+The shared state mutex serializes file access, including blocking HTTP calls.
+Heartbeats cannot renew while that mutex is held by a long operation; a stalled
+operation can therefore expire the session. Manifest requests are bounded by the
+remaining confirmed lifetime and success is checked again after the response.
+Block transfers can finish as harmless orphans after expiry, but publication
+cannot proceed. Increase TTL for workloads with longer I/O, rather than retrying
+an expired session. Shared multi-process WAL / `.tshm`, experimental MVCC,
+partial sync and Turso Cloud sync are outside this implementation.
 
 [Back to the getting-started guide](../README.md)

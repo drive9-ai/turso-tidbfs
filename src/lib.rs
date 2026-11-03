@@ -1,18 +1,22 @@
 //! Experimental Turso I/O over TiDB Filesystem HTTP. No local database files or FUSE.
 //!
-//! Each session reads an immutable snapshot. One CAS manifest publishes all file
-//! versions; stale writers fail closed. Do not rebase or retry failed sessions.
+//! Readers pin immutable snapshots. A renewable writer lease shares the manifest
+//! CAS with file publication; expired or replaced sessions fail closed.
+mod session;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
+pub use session::SessionOptions;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use turso_core::{
     Buffer, Completion, LimboError, Result,
@@ -49,6 +53,13 @@ fn valid_name(name: &str) -> bool {
 pub trait Store: Send + Sync {
     fn get(&self, name: &str) -> Result<Option<(Vec<u8>, u64)>>;
     fn put(&self, name: &str, bytes: &[u8], expected: u64) -> Result<u64>;
+    /// Conditional publication must finish within the session's remaining lifetime.
+    fn put_manifest(&self, bytes: &[u8], expected: u64, deadline: Instant) -> Result<u64> {
+        session::before_deadline(Instant::now(), deadline)?;
+        let revision = self.put("manifest.json", bytes, expected)?;
+        session::before_deadline(Instant::now(), deadline)?;
+        Ok(revision)
+    }
     /// Upload immutable data before publishing any manifest reference.
     /// A failure may leave orphan blocks, but must never publish a partial image.
     fn put_blocks(&self, blocks: &BTreeMap<String, Vec<u8>>) -> Result<()> {
@@ -147,6 +158,51 @@ impl HttpStore {
     pub fn metrics(&self) -> String {
         serde_json::to_string(&*self.metrics.lock().unwrap()).unwrap()
     }
+    fn put_object(
+        &self,
+        name: &str,
+        bytes: &[u8],
+        expected: u64,
+        timeout: Duration,
+    ) -> Result<u64> {
+        let response = self
+            .client
+            .put(self.url(name)?)
+            .timeout(timeout)
+            .bearer_auth(&self.token)
+            .header("Content-Type", "application/octet-stream")
+            .header("X-Dat9-Expected-Revision", expected)
+            .body(bytes.to_vec())
+            .send()
+            .map_err(|_| err("FS PUT transport failure; outcome unknown, reopen session"))?;
+        {
+            let mut m = self.metrics.lock().unwrap();
+            m.puts += 1;
+            m.uploaded_bytes += bytes.len() as u64;
+        }
+        if response.status().as_u16() == 409 {
+            return Err(LimboError::LockingError(
+                "FS manifest CAS conflict (HTTP 409)".into(),
+            ));
+        }
+        if !response.status().is_success() {
+            return Err(err(format!(
+                "FS PUT HTTP {}; reopen session",
+                response.status()
+            )));
+        }
+        #[derive(Deserialize)]
+        struct Ack {
+            revision: u64,
+        }
+        let ack: Ack = response
+            .json()
+            .map_err(|_| err("FS PUT invalid acknowledgement"))?;
+        if ack.revision <= expected {
+            return Err(err("FS PUT non-increasing revision"));
+        }
+        Ok(ack.revision)
+    }
 }
 impl Store for HttpStore {
     fn get(&self, name: &str) -> Result<Option<(Vec<u8>, u64)>> {
@@ -182,37 +238,14 @@ impl Store for HttpStore {
         Ok(Some((bytes, revision)))
     }
     fn put(&self, name: &str, bytes: &[u8], expected: u64) -> Result<u64> {
-        let response = self
-            .client
-            .put(self.url(name)?)
-            .bearer_auth(&self.token)
-            .header("Content-Type", "application/octet-stream")
-            .header("X-Dat9-Expected-Revision", expected)
-            .body(bytes.to_vec())
-            .send()
-            .map_err(|_| err("FS PUT transport failure; outcome unknown, reopen session"))?;
-        {
-            let mut m = self.metrics.lock().unwrap();
-            m.puts += 1;
-            m.uploaded_bytes += bytes.len() as u64;
-        }
-        if !response.status().is_success() {
-            return Err(err(format!(
-                "FS PUT HTTP {}; reopen session, do not retry stale state",
-                response.status()
-            )));
-        }
-        #[derive(Deserialize)]
-        struct Ack {
-            revision: u64,
-        }
-        let ack: Ack = response
-            .json()
-            .map_err(|_| err("FS PUT invalid acknowledgement"))?;
-        if ack.revision <= expected {
-            return Err(err("FS PUT non-increasing revision"));
-        }
-        Ok(ack.revision)
+        self.put_object(name, bytes, expected, Duration::from_secs(60))
+    }
+    fn put_manifest(&self, bytes: &[u8], expected: u64, deadline: Instant) -> Result<u64> {
+        let now = Instant::now();
+        session::before_deadline(now, deadline)?;
+        let revision = self.put_object("manifest.json", bytes, expected, deadline - now)?;
+        session::before_deadline(Instant::now(), deadline)?;
+        Ok(revision)
     }
     fn put_blocks(&self, blocks: &BTreeMap<String, Vec<u8>>) -> Result<()> {
         #[derive(Serialize)]
@@ -327,13 +360,24 @@ struct InlineBlock {
 struct Manifest {
     format: String,
     files: BTreeMap<String, Image>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lease: Option<session::RemoteLease>,
 }
 impl Default for Manifest {
     fn default() -> Self {
         Self {
             format: MANIFEST_FORMAT.into(),
+            lease: None,
             files: BTreeMap::new(),
         }
+    }
+}
+impl Manifest {
+    // A full inline manifest must still fit when heartbeat sequence digits grow.
+    fn lease_padding(&self) -> usize {
+        self.lease
+            .as_ref()
+            .map_or(0, |lease| 20 - lease.sequence.to_string().len())
     }
 }
 struct Block {
@@ -424,17 +468,24 @@ struct State {
     revision: u64,
     files: BTreeMap<String, Cached>,
     poisoned: bool,
+    readonly: bool,
+    lease: Option<session::LocalLease>,
 }
 struct Inner {
     store: Arc<dyn Store>,
     state: Mutex<State>,
     session: String,
+    clock: Arc<dyn session::SessionClock>,
 }
 pub struct FsIo {
     inner: Arc<Inner>,
+    heartbeat: Mutex<Option<session::Heartbeat>>,
 }
 impl FsIo {
     pub fn new(store: Arc<dyn Store>) -> Result<Self> {
+        Self::writer(store, SessionOptions::default())
+    }
+    fn load(store: Arc<dyn Store>) -> Result<Self> {
         let (manifest, revision) = match store.get("manifest.json")? {
             Some((bytes, rev)) => (
                 serde_json::from_slice::<Manifest>(&bytes)
@@ -445,6 +496,9 @@ impl FsIo {
         };
         if manifest.format != MANIFEST_FORMAT || manifest.files.len() > MAX_FILES {
             return Err(err("unsupported FS manifest"));
+        }
+        if let Some(lease) = &manifest.lease {
+            lease.validate()?;
         }
         for (name, image) in &manifest.files {
             if !valid_name(name)
@@ -472,52 +526,91 @@ impl FsIo {
                 }
             }
         }
-        static SESSION: AtomicU64 = AtomicU64::new(0);
-        let session = digest(
-            format!(
-                "{}:{:?}:{}",
-                std::process::id(),
-                std::time::SystemTime::now(),
-                SESSION.fetch_add(1, Ordering::Relaxed)
-            )
-            .as_bytes(),
-        );
+        let mut entropy = [0u8; 32];
+        getrandom::fill(&mut entropy).map_err(|_| err("generate unique session owner"))?;
+        let session = digest(&entropy);
         Ok(Self {
             inner: Arc::new(Inner {
                 store,
                 session,
+                clock: Arc::new(session::SystemClock),
                 state: Mutex::new(State {
                     manifest,
                     revision,
                     files: BTreeMap::new(),
                     poisoned: false,
+                    readonly: false,
+                    lease: None,
                 }),
             }),
+            heartbeat: Mutex::new(None),
         })
+    }
+    #[cfg(test)]
+    fn unlocked_for_test(store: Arc<dyn Store>) -> Result<Self> {
+        Self::load(store)
     }
 }
 impl Inner {
-    fn healthy(state: &State) -> Result<()> {
-        if state.poisoned {
+    fn healthy(&self, state: &State) -> Result<()> {
+        if state.poisoned
+            || state
+                .lease
+                .as_ref()
+                .is_some_and(|l| self.clock.now() >= l.deadline)
+        {
             Err(err(
-                "FS session failed; discard it and reopen from remote state",
+                "FS session failed or expired; discard it and reopen from remote state",
             ))
         } else {
             Ok(())
         }
     }
-    fn publish(&self, state: &mut State, manifest: Manifest) -> Result<()> {
+    fn publish(&self, state: &mut State, mut manifest: Manifest) -> Result<()> {
+        self.healthy(state)?;
+        if state.readonly {
+            return Err(err("read-only snapshot"));
+        }
+        let started = self.clock.now();
+        if state.lease.is_some() {
+            let remote = manifest
+                .lease
+                .as_mut()
+                .ok_or_else(|| err("missing writer lease"))?;
+            if remote.owner != self.session {
+                return Err(err("writer lease owner mismatch"));
+            }
+            remote.sequence = remote
+                .sequence
+                .checked_add(1)
+                .ok_or_else(|| err("lease sequence overflow"))?;
+        }
         let bytes = serde_json::to_vec(&manifest).map_err(|_| err("encode manifest"))?;
-        if bytes.len() > MAX_MANIFEST {
+        if bytes.len() + manifest.lease_padding() > MAX_MANIFEST {
             return Err(err("manifest exceeds prototype limit"));
         }
-        let revision = self.store.put("manifest.json", &bytes, state.revision)?;
+        let revision = if let Some(lease) = &state.lease {
+            let revision = self
+                .store
+                .put_manifest(&bytes, state.revision, lease.deadline)?;
+            self.healthy(state)?;
+            session::before_deadline(self.clock.now(), started + lease.ttl)?;
+            revision
+        } else {
+            self.store.put("manifest.json", &bytes, state.revision)?
+        };
         state.revision = revision;
         state.manifest = manifest;
+        if let Some(lease) = &mut state.lease {
+            lease.deadline = started + lease.ttl;
+        }
         Ok(())
     }
     fn sync(&self, name: &str, state: &mut State) -> Result<()> {
-        Self::healthy(state)?;
+        self.healthy(state)?;
+        if state.readonly {
+            return Ok(());
+        }
         let result = (|| {
             let cached = state
                 .files
@@ -577,6 +670,7 @@ impl Inner {
             if serde_json::to_vec(&manifest)
                 .map_err(|_| err("encode manifest"))?
                 .len()
+                + manifest.lease_padding()
                 > MAX_MANIFEST
             {
                 manifest.files.get_mut(name).unwrap().inline = None;
@@ -628,7 +722,7 @@ impl IO for FsIo {
             return Err(err("use a database basename, not a local path"));
         }
         let mut state = self.inner.state.lock().unwrap();
-        Inner::healthy(&state)?;
+        self.inner.healthy(&state)?;
         if !state.files.contains_key(name) {
             let base = if let Some(image) = state.manifest.files.get(name) {
                 image.clone()
@@ -679,7 +773,10 @@ impl IO for FsIo {
     }
     fn remove_file(&self, name: &str) -> Result<()> {
         let mut state = self.inner.state.lock().unwrap();
-        Inner::healthy(&state)?;
+        self.inner.healthy(&state)?;
+        if state.readonly {
+            return Err(err("read-only snapshot"));
+        }
         if state.files.get(name).is_some_and(|c| c.locked) {
             return Err(err("cannot remove open database"));
         }
@@ -702,8 +799,8 @@ struct FsFile {
 impl FsFile {
     fn access<T>(&self, write: bool, f: impl FnOnce(&mut Cached) -> Result<T>) -> Result<T> {
         let mut state = self.inner.state.lock().unwrap();
-        Inner::healthy(&state)?;
-        if write && self.readonly {
+        self.inner.healthy(&state)?;
+        if write && (self.readonly || state.readonly) {
             return Err(err("read-only file"));
         }
         let result = f(state
@@ -712,6 +809,10 @@ impl FsFile {
             .ok_or_else(|| err("file removed"))?);
         // A lazy source read can fail after earlier blocks were modified.
         // Never allow a later sync to publish that partially applied write.
+        let result = result.and_then(|value| {
+            self.inner.healthy(&state)?;
+            Ok(value)
+        });
         if write && result.is_err() {
             state.poisoned = true;
         }
@@ -902,7 +1003,7 @@ mod tests {
     #[test]
     fn inline_wal_tail_is_one_manifest_write_and_survives_rollover() {
         let store = Arc::new(MemoryStore::default());
-        let io = FsIo::new(store.clone()).unwrap();
+        let io = FsIo::unlocked_for_test(store.clone()).unwrap();
         let file = io
             .open_file("agent.db-wal", OpenFlags::Create, false)
             .unwrap();
@@ -924,7 +1025,7 @@ mod tests {
             "previous inline block must be externalized before it is replaced"
         );
         store.block_gets.store(0, Ordering::Relaxed);
-        let fresh = FsIo::new(store.clone())
+        let fresh = FsIo::unlocked_for_test(store.clone())
             .unwrap()
             .open_file("agent.db-wal", OpenFlags::None, false)
             .unwrap();
@@ -940,7 +1041,7 @@ mod tests {
     #[test]
     fn inline_budget_falls_back_to_verified_remote_blocks() {
         let store = Arc::new(MemoryStore::default());
-        let io = FsIo::new(store.clone()).unwrap();
+        let io = FsIo::unlocked_for_test(store.clone()).unwrap();
         for (name, value) in [("first-wal", 1), ("second-wal", 2)] {
             let file = io.open_file(name, OpenFlags::Create, false).unwrap();
             write(file.as_ref(), 0, &vec![value; BLOCK_SIZE]);
@@ -950,7 +1051,7 @@ mod tests {
         assert!(state.manifest.files["first-wal"].inline.is_some());
         assert!(state.manifest.files["second-wal"].inline.is_none());
         drop(state);
-        let fresh = FsIo::new(store)
+        let fresh = FsIo::unlocked_for_test(store)
             .unwrap()
             .open_file("second-wal", OpenFlags::None, false)
             .unwrap();
@@ -959,7 +1060,7 @@ mod tests {
     #[test]
     fn manifest_identity_and_inline_integrity_are_checked() {
         let store = Arc::new(MemoryStore::default());
-        let io = FsIo::new(store.clone()).unwrap();
+        let io = FsIo::unlocked_for_test(store.clone()).unwrap();
         let file = io
             .open_file("agent.db-wal", OpenFlags::Create, false)
             .unwrap();
@@ -993,14 +1094,17 @@ mod tests {
                 "manifest.json".into(),
                 (serde_json::to_vec(&manifest).unwrap(), revision),
             );
-            assert!(FsIo::new(store.clone()).is_err(), "must reject {damage}");
+            assert!(
+                FsIo::unlocked_for_test(store.clone()).is_err(),
+                "must reject {damage}"
+            );
         }
         store
             .objects
             .lock()
             .unwrap()
             .insert("manifest.json".into(), (body, revision));
-        let fresh = FsIo::new(store)
+        let fresh = FsIo::unlocked_for_test(store)
             .unwrap()
             .open_file("agent.db-wal", OpenFlags::None, false)
             .unwrap();
@@ -1010,7 +1114,7 @@ mod tests {
     fn demand_reads_cache_eviction_and_partial_overwrites() {
         let store = Arc::new(MemoryStore::default());
         {
-            let io = FsIo::new(store.clone()).unwrap();
+            let io = FsIo::unlocked_for_test(store.clone()).unwrap();
             let file = io.open_file("agent.db", OpenFlags::Create, false).unwrap();
             for i in 0..80 {
                 write(
@@ -1022,7 +1126,7 @@ mod tests {
             sync(file.as_ref()).unwrap();
         }
         store.block_gets.store(0, Ordering::Relaxed);
-        let io = FsIo::new(store.clone()).unwrap();
+        let io = FsIo::unlocked_for_test(store.clone()).unwrap();
         let file = io.open_file("agent.db", OpenFlags::None, false).unwrap();
         assert_eq!(file.size().unwrap(), (80 * BLOCK_SIZE) as u64);
         assert_eq!(
@@ -1063,7 +1167,7 @@ mod tests {
                 <= CACHE_BLOCKS + 2
         );
         sync(file.as_ref()).unwrap();
-        let fresh = FsIo::new(store)
+        let fresh = FsIo::unlocked_for_test(store)
             .unwrap()
             .open_file("agent.db", OpenFlags::None, false)
             .unwrap();
@@ -1079,7 +1183,7 @@ mod tests {
     fn failed_lazy_source_read_cannot_publish_a_partial_write() {
         let store = Arc::new(MemoryStore::default());
         {
-            let io = FsIo::new(store.clone()).unwrap();
+            let io = FsIo::unlocked_for_test(store.clone()).unwrap();
             let file = io.open_file("agent.db", OpenFlags::Create, false).unwrap();
             write(file.as_ref(), 0, &vec![1; BLOCK_SIZE]);
             write(file.as_ref(), BLOCK_SIZE as u64, &vec![2; BLOCK_SIZE]);
@@ -1087,7 +1191,7 @@ mod tests {
         }
         let path = format!("blocks/{}", digest(&vec![2; BLOCK_SIZE]));
         store.objects.lock().unwrap().get_mut(&path).unwrap().0[0] = 99;
-        let io = FsIo::new(store.clone()).unwrap();
+        let io = FsIo::unlocked_for_test(store.clone()).unwrap();
         let file = io.open_file("agent.db", OpenFlags::None, false).unwrap();
         let result = file.pwrite(
             0,
@@ -1100,7 +1204,7 @@ mod tests {
             "partially applied write must poison the session"
         );
         store.objects.lock().unwrap().get_mut(&path).unwrap().0[0] = 2;
-        let fresh = FsIo::new(store)
+        let fresh = FsIo::unlocked_for_test(store)
             .unwrap()
             .open_file("agent.db", OpenFlags::None, false)
             .unwrap();
@@ -1109,7 +1213,7 @@ mod tests {
     #[test]
     fn sparse_truncate_and_incremental_sync_survive_reopen() {
         let store = Arc::new(MemoryStore::default());
-        let io = FsIo::new(store.clone()).unwrap();
+        let io = FsIo::unlocked_for_test(store.clone()).unwrap();
         let file = io.open_file("agent.db", OpenFlags::Create, false).unwrap();
         write(file.as_ref(), 0, &vec![7; BLOCK_SIZE * 2]);
         sync(file.as_ref()).unwrap();
@@ -1133,7 +1237,7 @@ mod tests {
         );
         write(file.as_ref(), (BLOCK_SIZE + 2) as u64, &[8]);
         sync(file.as_ref()).unwrap();
-        let reopened = FsIo::new(store)
+        let reopened = FsIo::unlocked_for_test(store)
             .unwrap()
             .open_file("agent.db", OpenFlags::None, false)
             .unwrap();
@@ -1145,8 +1249,8 @@ mod tests {
     #[test]
     fn stale_writer_and_failed_manifest_cannot_publish_partial_state() {
         let store = Arc::new(MemoryStore::default());
-        let a = FsIo::new(store.clone()).unwrap();
-        let b = FsIo::new(store.clone()).unwrap();
+        let a = FsIo::unlocked_for_test(store.clone()).unwrap();
+        let b = FsIo::unlocked_for_test(store.clone()).unwrap();
         let fa = a.open_file("agent.db", OpenFlags::Create, false).unwrap();
         let fb = b.open_file("agent.db", OpenFlags::Create, false).unwrap();
         write(fa.as_ref(), 0, b"winner");
@@ -1158,7 +1262,7 @@ mod tests {
         write(fa.as_ref(), 0, b"failed");
         assert!(sync(fa.as_ref()).is_err());
         store.fail_manifest.store(false, Ordering::Relaxed);
-        let fresh = FsIo::new(store)
+        let fresh = FsIo::unlocked_for_test(store)
             .unwrap()
             .open_file("agent.db", OpenFlags::None, false)
             .unwrap();
@@ -1167,7 +1271,7 @@ mod tests {
     #[test]
     fn lost_acknowledgement_requires_fresh_session_and_recovers_committed_state() {
         let store = Arc::new(MemoryStore::default());
-        let io = FsIo::new(store.clone()).unwrap();
+        let io = FsIo::unlocked_for_test(store.clone()).unwrap();
         let file = io.open_file("agent.db", OpenFlags::Create, false).unwrap();
         write(file.as_ref(), 0, b"old");
         sync(file.as_ref()).unwrap();
@@ -1179,7 +1283,7 @@ mod tests {
             "uncertain commit must not be retried"
         );
         store.lose_ack.store(false, Ordering::Relaxed);
-        let fresh = FsIo::new(store)
+        let fresh = FsIo::unlocked_for_test(store)
             .unwrap()
             .open_file("agent.db", OpenFlags::None, false)
             .unwrap();
@@ -1187,7 +1291,7 @@ mod tests {
     }
     #[test]
     fn locks_readonly_and_file_limits_are_enforced() {
-        let io = FsIo::new(Arc::new(MemoryStore::default())).unwrap();
+        let io = FsIo::unlocked_for_test(Arc::new(MemoryStore::default())).unwrap();
         let file = io.open_file("agent.db", OpenFlags::Create, false).unwrap();
         assert!(io.open_file("agent.db", OpenFlags::Create, false).is_err());
         file.unlock_file().unwrap();
@@ -1221,7 +1325,7 @@ mod tests {
     #[test]
     fn corrupt_blocks_and_invalid_manifest_paths_are_rejected() {
         let store = Arc::new(MemoryStore::default());
-        let io = FsIo::new(store.clone()).unwrap();
+        let io = FsIo::unlocked_for_test(store.clone()).unwrap();
         let file = io.open_file("agent.db", OpenFlags::Create, false).unwrap();
         write(file.as_ref(), 0, b"valid");
         sync(file.as_ref()).unwrap();
@@ -1232,7 +1336,7 @@ mod tests {
             .get_mut(&format!("blocks/{}", digest(b"valid")))
             .unwrap()
             .0 = b"wrong".to_vec();
-        let corrupt = FsIo::new(store.clone())
+        let corrupt = FsIo::unlocked_for_test(store.clone())
             .unwrap()
             .open_file("agent.db", OpenFlags::None, false)
             .unwrap();
@@ -1250,7 +1354,7 @@ mod tests {
             .lock()
             .unwrap()
             .insert("manifest.json".into(), (invalid.to_vec(), 100));
-        assert!(FsIo::new(store).is_err());
+        assert!(FsIo::unlocked_for_test(store).is_err());
     }
     #[test]
     fn shared_database_connections_keep_reader_snapshots_and_exclude_second_writer() {
@@ -1266,7 +1370,7 @@ mod tests {
         }
 
         let store = Arc::new(MemoryStore::default());
-        let io = Arc::new(FsIo::new(store.clone()).unwrap());
+        let io = Arc::new(FsIo::unlocked_for_test(store.clone()).unwrap());
         let db = Database::open_file(io, "agent.db", Arc::new(SqliteDialect)).unwrap();
         let writer = db.connect().unwrap();
         let reader = db.connect().unwrap();
@@ -1308,7 +1412,7 @@ mod tests {
         contender.close().unwrap();
         writer.close().unwrap();
         drop(db);
-        let io = Arc::new(FsIo::new(store).unwrap());
+        let io = Arc::new(FsIo::unlocked_for_test(store).unwrap());
         let db = Database::open_file(io, "agent.db", Arc::new(SqliteDialect)).unwrap();
         let reopened = db.connect().unwrap();
         assert_eq!(
@@ -1323,13 +1427,13 @@ mod tests {
         let store = Arc::new(MemoryStore::default());
         // Dropping does not explicitly checkpoint: a new engine must recover WAL.
         {
-            let io = Arc::new(FsIo::new(store.clone()).unwrap());
+            let io = Arc::new(FsIo::unlocked_for_test(store.clone()).unwrap());
             let db = Database::open_file(io, "agent.db", Arc::new(SqliteDialect)).unwrap();
             let c = db.connect().unwrap();
             c.execute("PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=0; CREATE TABLE items(id INTEGER PRIMARY KEY, value TEXT); BEGIN; INSERT INTO items VALUES(1, 'kept'); COMMIT; BEGIN; INSERT INTO items VALUES(2, 'discarded'); ROLLBACK;").unwrap();
         }
         {
-            let io = Arc::new(FsIo::new(store.clone()).unwrap());
+            let io = Arc::new(FsIo::unlocked_for_test(store.clone()).unwrap());
             let db = Database::open_file(io, "agent.db", Arc::new(SqliteDialect)).unwrap();
             let c = db.connect().unwrap();
             let mut s = c
@@ -1342,7 +1446,7 @@ mod tests {
             c.execute("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
             c.close().unwrap();
         }
-        let io = Arc::new(FsIo::new(store).unwrap());
+        let io = Arc::new(FsIo::unlocked_for_test(store).unwrap());
         let db = Database::open_file(io, "agent.db", Arc::new(SqliteDialect)).unwrap();
         let c = db.connect().unwrap();
         let mut s = c.query("PRAGMA integrity_check").unwrap().unwrap();
