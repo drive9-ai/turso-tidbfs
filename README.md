@@ -1,4 +1,4 @@
-# turso-fs
+# turso-tidbfs
 
 Native [Turso](https://github.com/tursodatabase/turso) I/O over TiDB Filesystem
 (Drive9). SQL, the pager, and the WAL run in the application process; immutable
@@ -15,8 +15,8 @@ SQL → Turso pager / WAL → FsIo → FS HTTP API → durable storage
 Install Rust and log in with the `ti` CLI. With one active filesystem:
 
 ```bash
-git clone https://github.com/siddontang/turso-fs.git
-cd turso-fs
+git clone https://github.com/siddontang/turso-tidbfs.git
+cd turso-tidbfs
 python3 smoke.py
 ```
 
