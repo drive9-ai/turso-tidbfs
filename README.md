@@ -14,6 +14,38 @@ Your application → SQL → Turso in your process → HTTPS → TiDB Filesystem
 No FUSE mount or local database file is needed. This is an early prototype;
 use one active process per remote database directory.
 
+## Why use it?
+
+An agent can build up useful state across many steps: which documents it has
+processed, which tasks are finished, and what its tools returned. When that
+state lives only on a sandbox's disk, replacing the sandbox can lose the work.
+
+`turso-tidbfs` lets your application keep that structured state in SQL tables
+with committed data stored in TiDB Filesystem. A new process can open the same
+filesystem and database directory, query the saved records, and use them to
+continue the task.
+
+- **Keep progress across restarts.** Store task status, processing checkpoints,
+  and results independently of the process that produced them.
+- **Query the state your agent needs.** Use SQL to find unfinished work, inspect
+  results, and update related records in a transaction.
+- **Use your workspace's storage and permissions.** Database state can live
+  alongside input files and generated artifacts in the same FS namespace,
+  with access delegated through directory-scoped tokens.
+- **Read data as it is needed.** Native I/O fetches blocks on demand, so opening
+  a database does not require downloading the complete database file or
+  mounting a filesystem.
+
+For example, a research agent can commit the IDs of documents it has processed
+and keep large source files in FS. After that process exits, another process
+opens the same database and queries which documents remain. Your application
+uses those recovered records to decide what the agent should do next and
+provides the logic for resuming its workflow.
+
+This prototype fits small databases and commits at task boundaries. See
+[performance](results/README.md) for remote commit costs and [limits](#limits)
+for the current size and concurrency bounds.
+
 ## Getting started
 
 The walkthrough below is for **macOS or Linux** and uses a TiDB Cloud account.
