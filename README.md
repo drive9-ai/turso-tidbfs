@@ -15,7 +15,7 @@ SQL → Turso pager / WAL → FsIo → FS HTTP API → durable storage
 Install Rust and log in with the `ti` CLI. With one active filesystem:
 
 ```bash
-git clone https://github.com/siddontang/turso-tidbfs.git
+git clone https://github.com/drive9-ai/turso-tidbfs.git
 cd turso-tidbfs
 python3 smoke.py
 ```
