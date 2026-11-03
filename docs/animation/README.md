@@ -5,6 +5,10 @@ asynchronous readers, transaction snapshots and writer handoff. Counts and
 timing are illustrative. Actual measurements are in the
 [following report](../../results/follow.md) and [handoff report](../../results/handoff.md).
 
+Each process card contains a distinct Turso SQL engine. Native I/O connects the
+engines to shared database blocks and WAL in TiDB Filesystem, making the compute
+and storage roles explicit throughout the animation.
+
 The [treatment](TREATMENT.md) records the story, semantic colors, causal order
 and reference revision. All geometry and motion are original, drawn from
 `render(t)` with no playback history, random inputs or remote assets at render

@@ -2,6 +2,11 @@
 
 The viewer should remember: agents can be replaced while their committed SQL
 state stays available to readers and the next writer.
+Each agent embeds its own **Turso SQL engine**. TiDB Filesystem persists the
+shared database blocks and WAL. Show Turso as a nested component in every
+writer and reader process, with native I/O connecting those engines to storage.
+The headline names Turso explicitly; process roles and storage have separate
+visual boundaries so local SQL execution is visible throughout the animation.
 
 ## Structure
 
@@ -28,6 +33,9 @@ transaction stays pinned. The ending lets that transaction finish and catch up.
 - Primary accent: blue = committed data / active ownership. Amber = unavailable
   or refused. Neutral text = fixed snapshot. Text and shapes reinforce colors.
 - Persistent IDs: writer A, writer D, TiDB FS, following reader B, transaction C.
+- Engine cards: a Turso component inside A, D, B and C, retained across all
+  process states. Writes originate from writer engines; reader results appear
+  inside their Turso engines. Storage never becomes a SQL execution service.
 - Data: illustrative row counts 128 → 129 → 130. Time is compressed. This is an
   explanatory animation, not a live recording or latency chart.
 - The old writer must be refused only after the replacement has acquired the

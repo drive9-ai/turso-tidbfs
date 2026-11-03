@@ -11,10 +11,13 @@ An agent can commit its progress, readers can follow new results, and another
 agent can reopen the same data when the original sandbox is replaced. SQL runs
 locally in each process; committed state lives in shared storage.
 
-![Writer A commits SQL state to TiDB Filesystem. Reader B follows new commits while Reader C keeps its transaction snapshot. Writer D takes over after lease expiry; the old writer is refused. Reader C catches up after ending its transaction.](assets/overview.gif)
+![Each writer and reader process embeds a Turso SQL engine. Native I/O connects those engines to database blocks and WAL in TiDB Filesystem. Reader B follows commits while Reader C keeps its snapshot. Writer D takes over; the old writer is refused.](assets/overview.gif)
 
 *Illustrative animation; timing is compressed.*
 [Static diagram](assets/overview.png) · [Real remote verification](results/follow.md)
+
+Each agent embeds **Turso to execute SQL**; **TiDB Filesystem stores the shared
+database and WAL**. Native I/O connects the engines to that durable state.
 
 ## Why use it?
 

@@ -83,10 +83,10 @@ def curve(points, u):
 
 
 CHANNELS = {
-    "a": [(330, 324), (381, 324), (404, 359), (454, 359)],
-    "d": [(330, 540), (382, 540), (401, 472), (454, 472)],
-    "b": [(766, 359), (834, 359), (868, 311), (936, 311)],
-    "c": [(766, 472), (834, 472), (868, 525), (936, 525)],
+    "a": [(350, 322), (390, 322), (412, 359), (454, 359)],
+    "d": [(350, 534), (390, 534), (412, 472), (454, 472)],
+    "b": [(766, 359), (828, 359), (866, 316), (916, 316)],
+    "c": [(766, 472), (828, 472), (866, 528), (916, 528)],
 }
 
 
@@ -113,6 +113,19 @@ def key(p, x, y, color=BLUE):
     p.line([(x + 6, y), (x + 6, y + 5)], color, 3)
 
 
+def engine(p, x, y, width, action=None, rows=None, color=BLUE):
+    """A real embedded engine boundary inside the agent's process card."""
+    p.box((x, y, width, 76), fill=(19, 33, 53), outline=mix(BORDER, BLUE, 0.45), radius=10)
+    p.text((x + 16, y + 9), "Turso", 32, BLUE, 650)
+    if rows is None:
+        p.text((x + width - 96, y + 17), "SQL engine", 14, MUTED)
+        p.text((x + 16, y + 50), action, 20, color, 550)
+    else:
+        p.text((x + 16, y + 53), "SQL engine", 15, MUTED)
+        p.text((x + width - 104, y + 7), str(rows), 42, color, 650)
+        p.text((x + width - 101, y + 55), "rows", 15, MUTED)
+
+
 def state(t):
     beat = next((i for i, (a, b, _) in enumerate(BEATS) if a <= t < b), len(BEATS) - 1)
     return {"beat": beat, "caption": BEATS[beat][2],
@@ -132,12 +145,12 @@ def render(t):
     for y in range(192, 625, 48):
         p.line([(40, y), (1240, y)], (15, 22, 33), 0.5)
     p.text((48, 24), "TURSO + TIDB FILESYSTEM", 18, BLUE, 600)
-    p.text((48, 65), "SQL state that outlives your agent.", 48, TEXT, 650)
-    p.text((48, 131), "SQL runs locally. Committed state stays in shared storage.", 24, MUTED)
+    p.text((48, 65), "Turso in each agent. Shared durable state.", 46, TEXT, 650)
+    p.text((48, 131), "Turso executes SQL locally. Native I/O stores database blocks and WAL in TiDB FS.", 23, MUTED)
     p.text((1056, 25), f"0{s['beat'] + 1} / 07", 20, MUTED)
-    p.text((48, 192), "WRITE", 17, DIM, 600)
-    p.text((454, 192), "PERSIST", 17, DIM, 600)
-    p.text((936, 192), "READ", 17, DIM, 600)
+    p.text((48, 192), "WRITER PROCESS", 17, DIM, 600)
+    p.text((454, 192), "SHARED STORAGE", 17, DIM, 600)
+    p.text((916, 192), "READER PROCESSES", 17, DIM, 600)
 
     channel(p, "a", DIM if t < 9.5 else mix(BG, AMBER, 0.4))
     if t >= 9.5:
@@ -146,8 +159,8 @@ def render(t):
     channel(p, "c", BORDER if t < 20.5 else mix(BG, BLUE, 0.6))
 
     # Writer identities stay in place across loss and replacement.
-    p.box((48, 244, 282, 160), outline=BORDER if t < 9.5 else mix(BORDER, AMBER, 0.65))
-    p.text((72, 264), "Writer A", 32, TEXT, 650)
+    p.box((48, 226, 302, 184), outline=BORDER if t < 9.5 else mix(BORDER, AMBER, 0.65))
+    p.text((68, 243), "Writer A", 27, TEXT, 650)
     if t < 3:
         action, color = "Runs SQL locally", MUTED
     elif t < 6.5:
@@ -160,16 +173,20 @@ def render(t):
         action, color = "COMMIT +1", AMBER
     else:
         action, color = "Write refused", AMBER
-    p.text((72, 318), action, 25, color, 550)
-    p.text((72, 370), "Lease owner" if t < 9.5 else "Lease expiring" if t < 14.5 else "Old session", 19, BLUE if t < 9.5 else MUTED)
+    engine(p, 68, 284, 262, action=action, color=color)
+    p.line([(330, 322), (350, 322)], DIM if t < 9.5 else AMBER, 2)
+    p.text((68, 382), "Lease owner" if t < 9.5 else "Lease expiring" if t < 14.5 else "Old session", 19, BLUE if t < 9.5 else MUTED)
 
     if t >= 9.5:
-        p.box((48, 462, 282, 156), outline=BORDER if t < 14.5 else mix(BORDER, BLUE, 0.7))
-        p.text((72, 482), "Writer D", 32, TEXT, 650)
-        p.text((72, 532), "Waiting" if t < 14.5 else "COMMIT +1" if t < 17.5 else "Continues writing", 25, MUTED if t < 14.5 else BLUE, 550)
-        p.text((72, 584), "After lease expiry" if t < 14.5 else "Lease owner", 19, MUTED if t < 14.5 else BLUE)
-    key_y = 380 + (598 - 380) * ease((t - 14.5) / 0.5)
-    key(p, 294, key_y, BLUE if t < 9.5 or t >= 14.5 else AMBER)
+        p.box((48, 438, 302, 184), outline=BORDER if t < 14.5 else mix(BORDER, BLUE, 0.7))
+        p.text((68, 455), "Writer D", 27, TEXT, 650)
+        engine(p, 68, 496, 262, action="Waiting" if t < 14.5 else "COMMIT +1" if t < 17.5 else "Continues writing", color=MUTED if t < 14.5 else BLUE)
+        p.line([(330, 534), (350, 534)], DIM if t < 14.5 else BLUE, 2)
+        p.text((68, 594), "After lease expiry" if t < 14.5 else "Lease owner", 19, MUTED if t < 14.5 else BLUE)
+    transfer = ease((t - 14.5) / 0.5)
+    key_y = 391 + (603 - 391) * transfer
+    key_x = 314 + 120 * transfer * (1 - transfer)
+    key(p, key_x, key_y, BLUE if t < 9.5 or t >= 14.5 else AMBER)
 
     # The database + WAL remain available when compute stops.
     p.box((454, 278, 312, 266), fill=(23, 34, 51), outline=mix(BORDER, BLUE, 0.6), radius=20)
@@ -180,14 +197,14 @@ def render(t):
     p.text((480, 490), "committed rows", 23, MUTED)
 
     for y, name, subtitle, rows, color in [
-        (224, "Reader B", "Follows new commits", s["following"], BLUE),
-        (438, "Reader C", "Open transaction" if t < 20.5 else "Transaction ended", s["transaction"], TEXT if t < 21.85 else BLUE),
+        (220, "Reader B", "Follows new commits", s["following"], BLUE),
+        (432, "Reader C", "Open transaction" if t < 20.5 else "Transaction ended", s["transaction"], TEXT if t < 21.85 else BLUE),
     ]:
-        p.box((936, y, 296, 174))
-        p.text((960, y + 18), name, 30, TEXT, 650)
-        p.text((960, y + 59), subtitle, 21, MUTED)
-        p.text((960, y + 93), str(rows), 52, color, 650)
-        p.text((1091, y + 119), "rows", 22, MUTED)
+        p.box((916, y, 316, 190))
+        p.text((936, y + 16), name, 27, TEXT, 650)
+        engine(p, 936, y + 58, 276, rows=rows, color=color)
+        p.line([(916, y + 96), (936, y + 96)], mix(BG, BLUE, 0.6) if name == "Reader B" or t >= 20.5 else BORDER, 2)
+        p.text((936, y + 151), subtitle, 20, MUTED)
         # Same processes persist; ending a transaction is not a process restart.
         p.circle(1210, y + 31, 4, BLUE)
 
