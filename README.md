@@ -303,8 +303,8 @@ protocol, and failure behavior.
 ## One writer, multiple readers
 
 Independent processes can read the database while one process owns its writer
-lease. Each reader pins the database and WAL together at open time; reopen the
-reader to see later commits.
+lease. Read-only processes automatically follow committed updates without
+restarting. An open read transaction keeps its original snapshot until it ends.
 
 In one terminal, start the writer normally:
 
@@ -320,9 +320,46 @@ In other terminals, set the same endpoint, token and directory, then open reader
 ```
 
 A read-only process does not acquire the writer lease or modify remote state.
-It can use a token scoped to `"$FS_ROOT:read,list"`. Readers keep their snapshots
-across writer commits, checkpoints and writer handoffs. They do not refresh
-automatically, and writes through them are rejected.
+It can use a token scoped to `"$FS_ROOT:read,list"`. A background worker polls the
+manifest and prepares a new read-only engine when the file images change.
+The next query adopts the prepared version; explicit transactions stay on their
+original version:
+
+```sql
+BEGIN;
+?SELECT count(*) FROM tasks;
+-- A writer can commit, checkpoint, or be replaced while this transaction is open.
+?SELECT count(*) FROM tasks;
+COMMIT;
+-- The next query can adopt the latest prepared snapshot.
+?SELECT count(*) FROM tasks;
+```
+
+`SAVEPOINT` transactions are pinned too. Switching happens between input lines
+(or library execute/query calls), never partway through a SQL batch. For a fixed
+snapshot that stays unchanged until the process exits, use `--snapshot` instead
+of `--read-only`.
+
+| Reader setting | Default |
+| --- | --- |
+| `TIDBFS_REFRESH_MS` | `1000` — pause between background refresh attempts; range 10–60,000 ms. |
+| `TIDBFS_CACHE_BLOCKS` | `256` — shared immutable blocks per reader process, up to 8 MiB of payload; range 1–4,096 blocks. |
+
+The block cache is shared across engine generations and connections within the
+reader, reusing verified blocks and coalescing simultaneous requests for the
+same hash. It is separate from Turso's page cache and each generation's private
+file cache. Polling plus engine preparation causes asynchronous visibility;
+there is no fixed freshness bound. Lease-only heartbeat updates do not replace
+the engine. Checkpoint, WAL restart and writer takeover are handled by opening
+a matched database/WAL pair from one manifest.
+
+If a refresh fails, queries can continue on the last usable snapshot while the
+background worker retries. Uncached blocks still require remote access.
+Query responses include `snapshot_revision` and
+`reader` status: `applied_revision` is the latest prepared snapshot, which can
+be newer than a pinned transaction; `last_refresh_error` reports refresh failures.
+Monitor that status when freshness matters. Connection-specific settings and
+temporary state are not carried between engine generations.
 
 ### Let agents take turns writing
 
@@ -353,12 +390,30 @@ an uncertain outcome: query the recovered database before retrying application w
 
 For embedded use, `FsIo::writer(store, options)` or `FsIo::new(store)` acquires
 ownership; `SessionOptions::default()` fails immediately on contention.
-`FsIo::snapshot(store)` pins a read-only snapshot; open Turso with
+`FollowingReader::open(store, name, ReaderOptions::default())` starts automatic
+following; use its `connect()`, then `FollowingConnection::execute()` / `query()`.
+Keep the reader alive while its connections need updates. `refresh()` explicitly
+checks once, and `status()` exposes freshness and shared cache statistics.
+`FsIo::snapshot(store)` remains a fixed snapshot; open Turso with
 `OpenOptions::new(dialect).flags(OpenFlags::ReadOnly)`. Connections from one
 shared Turso `Database` retain the engine's reader snapshots and single write
 transaction coordination. Close the connections before calling `io.close()`
 to release ownership. The CLI uses one connection and executes lines sequentially.
 The adapter uses blocking HTTP and serializes block I/O within each instance.
+
+### Verify automatic following
+
+```bash
+env -u TIDBFS_ENDPOINT -u TIDBFS_TOKEN \
+  python3 follow.py --fs-id "$FS_ID"
+```
+
+The test keeps the same reader processes alive across commits, checkpoint/WAL
+reset, schema changes, a reader network outage, expired-writer takeover, and a
+clean handoff. It checks pinned transactions, shared cache reuse, and final
+integrity. CLI authentication creates temporary read-only scoped tokens for the
+readers. Results go to `output/follow.json`; test data stays under
+`/demos/turso-follow/`. See the [recorded following check](results/follow.md).
 
 ### Verify failure and recovery
 
@@ -370,7 +425,7 @@ env -u TIDBFS_ENDPOINT -u TIDBFS_TOKEN \
 This runs two live scenarios against TiDB Filesystem: cutting the old writer's
 transport through a disposable local proxy, and pausing/resuming the old process
 with `SIGSTOP`/`SIGCONT`. In each case it checks live-owner exclusion, idle
-heartbeats, two independent snapshot readers, takeover, WAL recovery, rejection
+heartbeats, two independent fixed snapshot readers (`--snapshot`), takeover, WAL recovery, rejection
 of the restored writer's COMMIT, the successor's continued ownership, and final
 rows and integrity. It uses 12-second TTLs and 2-second heartbeats for the test;
 normal program defaults remain as shown above. Results go to `output/handoff.json`.
@@ -383,7 +438,7 @@ authentication as the smoke test. See [recorded handoff checks](results/handoff.
 - 8 MiB per logical file, 8 logical files, and a 48 KiB manifest.
 - HTTP I/O blocks the calling thread. Hosted endpoints require HTTPS.
 - The server must support batch writes, and objects must fit its inline-upload limit.
-- No block garbage collection, live cross-client coherence, or workspace-wide transactions.
+- No block garbage collection, synchronous cross-client coherence, or workspace-wide transactions.
 - WAL mode is covered; experimental Turso modes are outside this prototype.
 
 ## Development

@@ -2,8 +2,12 @@
 //!
 //! Readers pin immutable snapshots. A renewable writer lease shares the manifest
 //! CAS with file publication; expired or replaced sessions fail closed.
+mod cache;
+mod follower;
 mod session;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+pub use cache::{BlockCache, CacheStats};
+pub use follower::{FollowingConnection, FollowingReader, ReaderOptions, ReaderStatus};
 use serde::{Deserialize, Serialize};
 pub use session::SessionOptions;
 use sha2::{Digest, Sha256};
@@ -341,7 +345,7 @@ impl Store for HttpStore {
     }
 }
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Image {
     size: usize,
@@ -349,7 +353,7 @@ struct Image {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     inline: Option<InlineBlock>,
 }
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct InlineBlock {
     hash: String,
@@ -406,7 +410,12 @@ impl Cached {
             locked: false,
         }
     }
-    fn ensure_block(&mut self, store: &dyn Store, index: usize) -> Result<()> {
+    fn ensure_block(
+        &mut self,
+        store: &dyn Store,
+        index: usize,
+        shared: Option<&BlockCache>,
+    ) -> Result<()> {
         self.clock += 1;
         if !self.blocks.contains_key(&index) {
             let start = index * BLOCK_SIZE;
@@ -417,19 +426,26 @@ impl Cached {
                     .blocks
                     .get(index)
                     .ok_or_else(|| err("missing block reference"))?;
-                let remote = if let Some(inline) = &self.base.inline
-                    && inline.hash == *hash
-                {
-                    BASE64
-                        .decode(&inline.data)
-                        .map_err(|_| err("invalid inline block encoding"))?
-                } else {
-                    store
-                        .get(&format!("blocks/{hash}"))?
-                        .ok_or_else(|| err("missing FS block"))?
-                        .0
-                };
                 let original_len = (self.base.size - start).min(BLOCK_SIZE);
+                let fetch = || {
+                    if let Some(inline) = &self.base.inline
+                        && inline.hash == *hash
+                    {
+                        BASE64
+                            .decode(&inline.data)
+                            .map_err(|_| err("invalid inline block encoding"))
+                    } else {
+                        Ok(store
+                            .get(&format!("blocks/{hash}"))?
+                            .ok_or_else(|| err("missing FS block"))?
+                            .0)
+                    }
+                };
+                let remote: Arc<[u8]> = if let Some(cache) = shared {
+                    cache.get(hash, original_len, fetch)?
+                } else {
+                    Arc::from(fetch()?)
+                };
                 if remote.len() != original_len || digest(&remote) != *hash {
                     return Err(err("corrupt FS block"));
                 }
@@ -476,6 +492,7 @@ struct Inner {
     state: Mutex<State>,
     session: String,
     clock: Arc<dyn session::SessionClock>,
+    block_cache: Option<Arc<BlockCache>>,
 }
 pub struct FsIo {
     inner: Arc<Inner>,
@@ -534,6 +551,7 @@ impl FsIo {
                 store,
                 session,
                 clock: Arc::new(session::SystemClock),
+                block_cache: None,
                 state: Mutex::new(State {
                     manifest,
                     revision,
@@ -633,7 +651,7 @@ impl Inner {
                     blocks.push(hash.clone());
                     continue;
                 }
-                cached.ensure_block(self.store.as_ref(), index)?;
+                cached.ensure_block(self.store.as_ref(), index, self.block_cache.as_deref())?;
                 let bytes = &cached.blocks.get(&index).unwrap().bytes[..length];
                 let hash = digest(bytes);
                 if previous.and_then(|p| p.blocks.get(index)) != Some(&hash) {
@@ -860,7 +878,11 @@ impl File for FsFile {
                 let index = offset / BLOCK_SIZE;
                 let in_block = offset % BLOCK_SIZE;
                 let length = (BLOCK_SIZE - in_block).min(n - copied);
-                cached.ensure_block(self.inner.store.as_ref(), index)?;
+                cached.ensure_block(
+                    self.inner.store.as_ref(),
+                    index,
+                    self.inner.block_cache.as_deref(),
+                )?;
                 output[copied..copied + length]
                     .copy_from_slice(&cached.blocks[&index].bytes[in_block..in_block + length]);
                 copied += length;
@@ -893,7 +915,11 @@ impl File for FsFile {
                         },
                     );
                 } else {
-                    cached.ensure_block(self.inner.store.as_ref(), index)?;
+                    cached.ensure_block(
+                        self.inner.store.as_ref(),
+                        index,
+                        self.inner.block_cache.as_deref(),
+                    )?;
                 }
                 cached.dirty.insert(index);
                 cached.blocks.get_mut(&index).unwrap().bytes[in_block..in_block + length]
@@ -927,7 +953,11 @@ impl File for FsFile {
             if len < cached.size {
                 if len % BLOCK_SIZE != 0 {
                     let index = len / BLOCK_SIZE;
-                    cached.ensure_block(self.inner.store.as_ref(), index)?;
+                    cached.ensure_block(
+                        self.inner.store.as_ref(),
+                        index,
+                        self.inner.block_cache.as_deref(),
+                    )?;
                     cached.blocks.get_mut(&index).unwrap().bytes[len % BLOCK_SIZE..].fill(0);
                     cached.dirty.insert(index);
                 }

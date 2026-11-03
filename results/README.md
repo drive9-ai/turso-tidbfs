@@ -58,3 +58,5 @@ python3 smoke.py
 
 Independent snapshot readers, remote writer leases and failure handoff are
 covered by the [live handoff checks](handoff.md).
+Automatic read-only following through checkpoint, WAL reset and writer handoff
+is covered by the [following check](follow.md).

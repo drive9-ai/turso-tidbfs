@@ -6,15 +6,48 @@ use turso_core::{
     Database, OpenOptions, SqliteDialect, StepResult,
     io::{IO, OpenFlags},
 };
-use turso_fs::{FsIo, HttpStore, SessionOptions};
+use turso_fs::{FollowingReader, FsIo, HttpStore, ReaderOptions, SessionOptions};
+
+fn follow(store: Arc<HttpStore>, root: &str, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let reader = FollowingReader::open(store.clone(), name, ReaderOptions::from_env()?)?;
+    let mut conn = reader.connect()?;
+    println!(
+        "{}",
+        serde_json::json!({"ready":true,"root":root,"database":name,"read_only":true,"following":true})
+    );
+    io::stdout().flush()?;
+    for line in io::stdin().lock().lines() {
+        let sql = line?;
+        if sql.trim().is_empty() {
+            continue;
+        }
+        let rows = if let Some(query) = sql.strip_prefix('?') {
+            conn.query(query)?
+        } else {
+            conn.execute(&sql)?;
+            Vec::new()
+        };
+        println!(
+            "{}",
+            serde_json::json!({"ok":true,"rows":rows,"snapshot_revision":conn.snapshot_revision(),"reader":reader.status()})
+        );
+        io::stdout().flush()?;
+    }
+    conn.close()?;
+    drop(conn);
+    drop(reader);
+    eprintln!("FS transfer metrics: {}", store.metrics());
+    Ok(())
+}
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let first = args.next().ok_or("usage: turso-fs [--read-only] /remote/directory [database.db] < statements.sql\nSet TIDBFS_ENDPOINT and TIDBFS_TOKEN. One complete SQL batch per input line.")?;
-    let readonly = first == "--read-only";
+    let first = args.next().ok_or("usage: turso-fs [--read-only|--snapshot] /remote/directory [database.db] < statements.sql\nSet TIDBFS_ENDPOINT and TIDBFS_TOKEN. One complete SQL batch per input line.")?;
+    let following = first == "--read-only";
+    let readonly = following || first == "--snapshot";
     let root = if readonly {
         args.next()
-            .ok_or("--read-only requires a remote directory")?
+            .ok_or("reader mode requires a remote directory")?
     } else {
         first
     };
@@ -27,6 +60,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("TIDBFS_TOKEN")?,
         &root,
     )?);
+    if following {
+        return follow(store, &root, &name);
+    }
     let io = Arc::new(if readonly {
         FsIo::snapshot(store.clone())?
     } else {
@@ -47,7 +83,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     conn.execute("PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=0;")?;
     println!(
         "{}",
-        serde_json::json!({"ready": true, "root": root, "database": name, "read_only": readonly})
+        serde_json::json!({"ready": true, "root": root, "database": name, "read_only": readonly,"following":false})
     );
     io::stdout().flush()?;
     for line in io::stdin().lock().lines() {

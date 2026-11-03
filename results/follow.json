@@ -1,0 +1,87 @@
+{
+  "recorded_at": "2026-11-03T06:57:10Z",
+  "root": "/demos/turso-follow/d57246a2a6b245dbb4f6f4f9611d5a6e",
+  "binary_sha256": "b0fab26b5e257168881d4a91d9d9e286e46fbaa220353b3eda0d6d278c5ebec8",
+  "refresh_ms": 250,
+  "ttl_ms": 12000,
+  "read_only_scoped_tokens": true,
+  "checks": [
+    "same live reader follows commit; explicit transaction retains old snapshot",
+    "checkpoint/truncate, new WAL generation and schema changes followed; old transaction retains old schema",
+    "reader transport outage retains last usable snapshot and reports lag/error; same process catches up after reconnect",
+    "same reader processes follow lease takeover; old transaction survives takeover and upgrades after COMMIT; restored writer rejected",
+    "same PIDs follow repeated WAL reset and clean writer handoff; shared cache hits and bounded size verified; final integrity ok"
+  ],
+  "visibility_ms": {
+    "commit": 206.294,
+    "wal_reset": 973.58,
+    "schema_change": 730.201,
+    "reader_reconnect": 731.554,
+    "writer_takeover": 949.268,
+    "successor_commit": 1149.123,
+    "transaction_end": 581.063,
+    "second_wal_reset": 785.376,
+    "second_reader_reset": 631.603,
+    "clean_handoff": 1209.384,
+    "second_reader_handoff": 626.21
+  },
+  "reader_pids": [
+    39924,
+    39930
+  ],
+  "takeover_open_ms": 15815.609,
+  "reader_status": [
+    {
+      "ok": true,
+      "reader": {
+        "applied_revision": 33,
+        "cache": {
+          "bytes": 369488,
+          "capacity_blocks": 256,
+          "entries": 20,
+          "evictions": 0,
+          "hits": 28,
+          "misses": 20,
+          "waits": 0
+        },
+        "generations": 15,
+        "last_refresh_error": null,
+        "observed_revision": 33
+      },
+      "rows": [
+        [
+          "ok"
+        ]
+      ],
+      "snapshot_revision": 33
+    },
+    {
+      "ok": true,
+      "reader": {
+        "applied_revision": 33,
+        "cache": {
+          "bytes": 369488,
+          "capacity_blocks": 256,
+          "entries": 20,
+          "evictions": 0,
+          "hits": 68,
+          "misses": 20,
+          "waits": 0
+        },
+        "generations": 15,
+        "last_refresh_error": null,
+        "observed_revision": 33
+      },
+      "rows": [
+        [
+          "ok"
+        ]
+      ],
+      "snapshot_revision": 33
+    }
+  ],
+  "final_count": 136,
+  "reader_processes_unchanged": true,
+  "integrity_check": "ok",
+  "local_database_files": 0
+}

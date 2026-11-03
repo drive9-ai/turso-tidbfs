@@ -92,7 +92,7 @@ def run_case(args, binary, failure):
     checks = []
 
     def start(readonly=False, child_env=None):
-        session = Session(binary, root, child_env or env, readonly=readonly)
+        session = Session(binary, root, child_env or env, readonly=readonly, follow=False)
         sessions.append(session)
         return session
 

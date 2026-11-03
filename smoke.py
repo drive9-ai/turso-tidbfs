@@ -43,9 +43,9 @@ def access(args, root):
 
 
 class Session:
-    def __init__(self, binary, root, env, readonly=False):
+    def __init__(self, binary, root, env, readonly=False, follow=True):
         self.folder = tempfile.TemporaryDirectory(prefix="turso-fs-sandbox-")
-        command = [str(binary), *(["--read-only"] if readonly else []), root]
+        command = [str(binary), *(["--read-only" if follow else "--snapshot"] if readonly else []), root]
         self.process = subprocess.Popen(command, env=env, cwd=self.folder.name,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, text=True, bufsize=1)
@@ -88,6 +88,7 @@ class Session:
         self.process.stdin.flush()
         response = self.receive()
         assert response.get("ok"), response
+        self.last_response = response
         return response["rows"]
 
     def stop(self, kill=False):

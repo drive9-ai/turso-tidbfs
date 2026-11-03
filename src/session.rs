@@ -115,6 +115,11 @@ impl FsIo {
         io.inner.state.lock().unwrap().readonly = true;
         Ok(io)
     }
+    pub fn snapshot_with_cache(store: Arc<dyn Store>, cache: Arc<BlockCache>) -> Result<Self> {
+        let mut io = Self::snapshot(store)?;
+        Arc::get_mut(&mut io.inner).unwrap().block_cache = Some(cache);
+        Ok(io)
+    }
     pub fn ensure_healthy(&self) -> Result<()> {
         self.inner.healthy(&self.inner.state.lock().unwrap())
     }

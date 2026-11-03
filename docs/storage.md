@@ -120,11 +120,64 @@ flags. Snapshots can coexist with writer commits and takeover because referenced
 blocks remain immutable and inline bytes belong to the captured manifest.
 There is no block garbage collection; any future GC must account for readers.
 
-A reader sees commits in its captured WAL, not changes published after it opened.
-Reopen to refresh. Separate databases must use separate directories because one
-manifest and lease govern the directory as a unit. Connections from one shared
-Turso `Database` still support reader snapshots and one write transaction at a
-time; a competing transaction receives `Busy`.
+A fixed snapshot sees commits in its captured WAL, not later publications.
+Separate databases must use separate directories because one manifest and lease
+govern the directory as a unit. Connections from one shared Turso `Database`
+still support reader snapshots and one write transaction at a time; a competing
+transaction receives `Busy`.
+
+### Automatic following
+
+`FollowingReader` prepares new immutable engines in a background polling thread.
+It reads exactly one manifest per attempt, validates it, ignores lease-only
+updates, and opens a read-only `Database` against the captured database/WAL
+images. Schema preparation must succeed before the candidate replaces the
+current generation. Failed or malformed candidates leave the last usable
+engine in place; status exposes the error and subsequent attempts retry.
+Manifest revisions cannot move backwards.
+
+A `FollowingConnection` adopts the latest prepared generation before an
+execute/query call only if Turso reports autocommit mode. It never parses SQL
+to guess transaction state. Explicit `BEGIN` and `SAVEPOINT` transactions retain
+their original connection, engine, schema and file images until they finish.
+The next call after COMMIT/ROLLBACK can upgrade. A multi-statement batch stays
+on one generation for the full call. Results are fully materialized; raw Turso
+statement handles are not exposed by this wrapper. Session-specific PRAGMAs
+and temporary state are not migrated when the connection changes generations.
+
+This is snapshot replacement, not appending bytes into an already-open engine's
+WAL. Reopening the matched pair handles checkpoint, WAL truncation/restart,
+writer recovery and schema changes without modifying Turso's private WAL index
+or page cache. Existing transactions retain their old immutable data; no remote
+reader lock can delay the writer's checkpoint. Generations without current
+ownership or connections are dropped. Shared multi-process WAL memory is not
+required. A held read transaction intentionally continues to see its old version.
+
+### Shared immutable block cache
+
+Following generations share a bounded cache keyed by SHA-256. Only bytes whose
+hash and expected length validate enter the cache, including valid inline WAL
+tails. Each file descriptor copies from those immutable bytes into its private
+blocks; mutations cannot alter shared entries. Cache hits revalidate expected
+length. Concurrent misses for one hash share a result; unrelated hashes fetch
+without holding the cache mutex. Errors are not retained as block entries.
+LRU eviction limits the cache to the configured block count (default 256, at
+most 8 MiB of payload). Turso page caches and private file caches are additional
+memory, and active old transactions keep their engine generation alive.
+
+The cache is shared within one follower, not between OS processes. The existing
+per-file 64-clean-block limit still applies. Unchanged database blocks can be
+reused across engine preparation, while changed or evicted blocks remain demand
+reads. There is no WAL-only incremental recovery optimization in this version.
+
+Polling defaults to one second between attempts. Visibility delay also includes
+network, recovery and schema preparation; refresh does not block SQL on the
+reader-state mutex during I/O. Brief mutex holds select or publish a generation.
+A failed refresh may leave queries serving older data, so monitor
+`last_refresh_error`, `applied_revision`, `observed_revision`, and each connection's
+`snapshot_revision`. Lease-only revisions do not imply new SQL data. The CLI's
+`--read-only` mode follows automatically; `--snapshot` and `FsIo::snapshot` stay
+fixed. Reader refresh never acquires writer ownership or writes remote state.
 
 The shared state mutex serializes file access, including blocking HTTP calls.
 Heartbeats cannot renew while that mutex is held by a long operation; a stalled
