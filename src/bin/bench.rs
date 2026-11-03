@@ -43,7 +43,7 @@ fn measure(
         json!({"name":name, "operations":ops, "elapsed_ms":ms, "ms_per_operation":ms / ops as f64});
     if let (Some(before), Some(store)) = (before, store) {
         let after = store.metrics_snapshot();
-        result["http"] = json!({"gets":after.gets-before.gets,"puts":after.puts-before.puts,"downloaded_bytes":after.downloaded_bytes-before.downloaded_bytes,"uploaded_bytes":after.uploaded_bytes-before.uploaded_bytes});
+        result["http"] = json!({"gets":after.gets-before.gets,"puts":after.puts-before.puts,"batch_requests":after.batch_requests-before.batch_requests,"downloaded_bytes":after.downloaded_bytes-before.downloaded_bytes,"uploaded_bytes":after.uploaded_bytes-before.uploaded_bytes});
     }
     Ok(result)
 }

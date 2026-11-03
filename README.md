@@ -65,7 +65,7 @@ WAL pages; those reads are demand I/O too, not a pre-download of every file.
   immutable data, and publishes the manifest last. Unrelated blocks are not read
   during sync. Clean cached blocks can then be evicted safely.
 
-The private directory format remains compatible with the original prototype:
+The directory uses the v2 adapter format:
 
 ```text
 manifest.json          # atomic map of logical database/WAL files
@@ -74,6 +74,28 @@ blocks/<sha256>        # immutable blocks; last block can be shorter
 
 These objects are adapter storage, not ordinary SQLite files that another
 filesystem client can open directly.
+
+### Fewer commit round trips
+
+New immutable blocks are sent through `/v1/fs:batch-write`, up to 128 blocks per
+request (4 MiB decoded content). There are no existence GETs before a create.
+Only a definite per-item 409 with revision zero can reuse an existing object,
+and its contents must then match exactly. Every item acknowledgement is checked;
+partial failure, missing/duplicate paths, or a post-commit error stops publication.
+The manifest always follows the data batch in a separate conditional PUT.
+
+The last WAL block can be embedded as base64 inside the manifest when the whole
+manifest stays within 48 KiB. A small steady-state commit then has **one remote CAS update**,
+with WAL bytes and references published together. When that tail rolls into a
+normal block, its previous inline contents are uploaded before the next manifest
+replaces them. If the inline budget is unavailable, normal block upload remains
+the fallback. This does not weaken `FULL` durability or defer an acknowledged
+commit into a background upload.
+
+The reader accepts both v1 and v2 snapshots. The first new sync upgrades
+a v1 manifest to v2; old v1 clients cannot read that upgraded directory. There
+is no automatic downgrade. Benchmark/smoke runs always use fresh directories.
+The optimized HTTP adapter requires an FS deployment with batch-write support.
 
 ## Durability and conflict behavior
 
@@ -126,6 +148,16 @@ a cold SSD. Local fsync protects this machine's filesystem; FS sync includes
 remote publication and has a different failure boundary. Preparation and final
 integrity checks are excluded from per-operation timing.
 
+For an A/B comparison with an earlier release-built bench executable:
+
+```bash
+python3 benchmark.py --baseline-binary /path/to/old/bench \
+  --phases seed transactions --trials 3 --output output/commit-comparison.json
+```
+
+Baseline and optimized runs use separate remote paths and alternate order.
+Binary hashes are recorded, and partial results are saved after every phase.
+
 The runners build release binaries. To reuse a build, set `TURSO_FS_BINARY` for
 `smoke.py` or `TURSO_FS_BENCH_BINARY` for `benchmark.py`. `CARGO_TARGET_DIR` is also
 supported. Reports and tokens are separate: output files never contain tokens.
@@ -142,7 +174,8 @@ python3 smoke.py
 Unit tests cover lazy reads, cache hits/eviction, full and partial overwrites,
 truncate/regrow, incremental sync, real Turso transactions and WAL recovery,
 lock ownership, stale writers, corrupt blocks/manifests, failed publication,
-and lost acknowledgements. The manual live smoke commits 64 rows, kills the
+lost acknowledgements, legacy-format upgrades, inline WAL rollover/budget,
+batch limits, malformed acknowledgements, and partial batch failures. The manual live smoke commits 64 rows, kills the
 process with an open uncommitted transaction, recovers in a fresh sandbox,
 checks integrity and checkpoint/reopen behavior, and rejects a stale writer with
 HTTP 409. It verifies no local database files appeared in its sandbox.

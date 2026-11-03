@@ -2,6 +2,7 @@
 //!
 //! Each session reads an immutable snapshot. One CAS manifest publishes all file
 //! versions; stale writers fail closed. Do not rebase or retry failed sessions.
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -47,12 +48,28 @@ fn valid_name(name: &str) -> bool {
 pub trait Store: Send + Sync {
     fn get(&self, name: &str) -> Result<Option<(Vec<u8>, u64)>>;
     fn put(&self, name: &str, bytes: &[u8], expected: u64) -> Result<u64>;
+    /// Upload immutable data before publishing any manifest reference.
+    /// A failure may leave orphan blocks, but must never publish a partial image.
+    fn put_blocks(&self, blocks: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+        for (hash, bytes) in blocks {
+            let path = format!("blocks/{hash}");
+            match self.get(&path)? {
+                Some((existing, _)) if existing == *bytes => (),
+                Some(_) => return Err(err("immutable FS block hash mismatch")),
+                None => {
+                    self.put(&path, bytes, 0)?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Default, Serialize)]
 pub struct Metrics {
     pub gets: u64,
     pub puts: u64,
+    pub batch_requests: u64,
     pub downloaded_bytes: u64,
     pub uploaded_bytes: u64,
 }
@@ -196,6 +213,98 @@ impl Store for HttpStore {
         }
         Ok(ack.revision)
     }
+    fn put_blocks(&self, blocks: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+        #[derive(Serialize)]
+        struct Item {
+            path: String,
+            expected_revision: u64,
+            data: String,
+        }
+        #[derive(Deserialize)]
+        struct Ack {
+            path: String,
+            status: u16,
+            #[serde(default)]
+            revision: u64,
+        }
+        #[derive(Deserialize)]
+        struct Response {
+            results: Vec<Ack>,
+        }
+        let root = self
+            .base
+            .path()
+            .strip_prefix("/v1/fs")
+            .ok_or_else(|| err("invalid FS root"))?;
+        let blocks: Vec<_> = blocks.iter().collect();
+        // 128 x 32 KiB stays within the protocol's 128-item / 4-MiB limit.
+        for group in blocks.chunks(128) {
+            let items: Vec<_> = group
+                .iter()
+                .map(|(hash, bytes)| Item {
+                    path: format!("{root}blocks/{hash}"),
+                    expected_revision: 0,
+                    data: BASE64.encode(bytes),
+                })
+                .collect();
+            let body = serde_json::to_vec(&serde_json::json!({"items": items}))
+                .map_err(|_| err("encode block batch"))?;
+            let uploaded_bytes = body.len() as u64;
+            let response = self
+                .client
+                .post(self.url("/v1/fs:batch-write")?)
+                .bearer_auth(&self.token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .send()
+                .map_err(|_| err("FS block batch transport failure; reopen session"))?;
+            {
+                let mut metrics = self.metrics.lock().unwrap();
+                metrics.batch_requests += 1;
+                metrics.uploaded_bytes += uploaded_bytes;
+            }
+            if !response.status().is_success() {
+                return Err(err(format!(
+                    "FS block batch HTTP {}; reopen session",
+                    response.status()
+                )));
+            }
+            let response: Response = response
+                .json()
+                .map_err(|_| err("invalid FS batch acknowledgement"))?;
+            if response.results.len() != items.len() {
+                return Err(err("FS batch acknowledgement count mismatch"));
+            }
+            for ((ack, item), (_, bytes)) in response.results.iter().zip(&items).zip(group) {
+                if ack.path != item.path {
+                    return Err(err("FS batch acknowledgement path mismatch"));
+                }
+                match (ack.status, ack.revision) {
+                    (200, revision) if revision > 0 => (),
+                    // Only a definite create conflict can reuse a verified existing block.
+                    (409, 0) => {
+                        let relative = item
+                            .path
+                            .strip_prefix(root)
+                            .ok_or_else(|| err("invalid block path"))?;
+                        let (existing, _) = self
+                            .get(relative)?
+                            .ok_or_else(|| err("conflicting FS block missing"))?;
+                        if existing != **bytes {
+                            return Err(err("immutable FS block hash mismatch"));
+                        }
+                    }
+                    _ => {
+                        return Err(err(format!(
+                            "FS block batch item HTTP {}; reopen session",
+                            ack.status
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -203,6 +312,14 @@ impl Store for HttpStore {
 struct Image {
     size: usize,
     blocks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    inline: Option<InlineBlock>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct InlineBlock {
+    hash: String,
+    data: String,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -255,9 +372,18 @@ impl Cached {
                     .blocks
                     .get(index)
                     .ok_or_else(|| err("missing block reference"))?;
-                let (remote, _) = store
-                    .get(&format!("blocks/{hash}"))?
-                    .ok_or_else(|| err("missing FS block"))?;
+                let remote = if let Some(inline) = &self.base.inline
+                    && inline.hash == *hash
+                {
+                    BASE64
+                        .decode(&inline.data)
+                        .map_err(|_| err("invalid inline block encoding"))?
+                } else {
+                    store
+                        .get(&format!("blocks/{hash}"))?
+                        .ok_or_else(|| err("missing FS block"))?
+                        .0
+                };
                 let original_len = (self.base.size - start).min(BLOCK_SIZE);
                 if remote.len() != original_len || digest(&remote) != *hash {
                     return Err(err("corrupt FS block"));
@@ -316,7 +442,9 @@ impl FsIo {
             ),
             None => (Manifest::default(), 0),
         };
-        if manifest.format != "turso-fs-v1" || manifest.files.len() > MAX_FILES {
+        if !matches!(manifest.format.as_str(), "turso-fs-v1" | "turso-fs-v2")
+            || manifest.files.len() > MAX_FILES
+        {
             return Err(err("unsupported FS manifest"));
         }
         for (name, image) in &manifest.files {
@@ -331,6 +459,18 @@ impl FsIo {
                 })
             {
                 return Err(err("invalid manifest file or block reference"));
+            }
+            if let Some(inline) = &image.inline {
+                if manifest.format != "turso-fs-v2" || image.blocks.last() != Some(&inline.hash) {
+                    return Err(err("invalid inline block reference"));
+                }
+                let bytes = BASE64
+                    .decode(&inline.data)
+                    .map_err(|_| err("invalid inline block encoding"))?;
+                let length = image.size - (image.blocks.len() - 1) * BLOCK_SIZE;
+                if bytes.len() != length || digest(&bytes) != inline.hash {
+                    return Err(err("corrupt inline block"));
+                }
             }
         }
         static SESSION: AtomicU64 = AtomicU64::new(0);
@@ -389,6 +529,7 @@ impl Inner {
                 return Ok(());
             }
             let mut blocks = Vec::new();
+            let mut uploads = BTreeMap::new();
             for index in 0..cached.size.div_ceil(BLOCK_SIZE) {
                 let start = index * BLOCK_SIZE;
                 let length = (cached.size - start).min(BLOCK_SIZE);
@@ -404,25 +545,63 @@ impl Inner {
                 let bytes = &cached.blocks.get(&index).unwrap().bytes[..length];
                 let hash = digest(bytes);
                 if previous.and_then(|p| p.blocks.get(index)) != Some(&hash) {
-                    let path = format!("blocks/{hash}");
-                    match self.store.get(&path)? {
-                        Some((existing, _)) if existing == bytes => (),
-                        Some(_) => return Err(err("immutable FS block hash mismatch")),
-                        None => {
-                            self.store.put(&path, bytes, 0)?;
-                        }
-                    }
+                    uploads.insert(hash.clone(), bytes.to_vec());
                 }
                 blocks.push(hash);
             }
+            let mut image = Image {
+                size: cached.size,
+                blocks,
+                inline: None,
+            };
+            // A self-contained WAL tail and its CAS manifest form one durable update.
+            // Older inline tails that remain referenced must first become immutable objects.
+            let previous_inline = cached.base.inline.clone();
+            if name.ends_with("-wal")
+                && let Some(hash) = image.blocks.last()
+            {
+                let bytes = uploads.get(hash).cloned().or_else(|| {
+                    previous_inline
+                        .as_ref()
+                        .filter(|b| b.hash == *hash)
+                        .and_then(|b| BASE64.decode(&b.data).ok())
+                });
+                if let Some(bytes) = bytes {
+                    image.inline = Some(InlineBlock {
+                        hash: hash.clone(),
+                        data: BASE64.encode(bytes),
+                    });
+                }
+            }
             let mut manifest = state.manifest.clone();
-            manifest.files.insert(
-                name.to_owned(),
-                Image {
-                    size: cached.size,
-                    blocks,
-                },
-            );
+            manifest.format = "turso-fs-v2".into();
+            manifest.files.insert(name.to_owned(), image);
+            if serde_json::to_vec(&manifest)
+                .map_err(|_| err("encode manifest"))?
+                .len()
+                > MAX_MANIFEST
+            {
+                manifest.files.get_mut(name).unwrap().inline = None;
+            }
+            let image = &manifest.files[name];
+            if let Some(previous) = previous_inline
+                && image.blocks.contains(&previous.hash)
+                && image
+                    .inline
+                    .as_ref()
+                    .is_none_or(|b| b.hash != previous.hash)
+            {
+                uploads.insert(
+                    previous.hash,
+                    BASE64
+                        .decode(&previous.data)
+                        .map_err(|_| err("invalid inline block encoding"))?,
+                );
+            }
+            if let Some(inline) = &image.inline {
+                uploads.remove(&inline.hash);
+            }
+            self.store.put_blocks(&uploads)?;
             self.publish(state, manifest)?;
             let cached = state.files.get_mut(name).unwrap();
             cached.base = state.manifest.files[name].clone();
@@ -723,6 +902,86 @@ mod tests {
         buf.as_slice().to_vec()
     }
     #[test]
+    fn inline_wal_tail_is_one_manifest_write_and_survives_rollover() {
+        let store = Arc::new(MemoryStore::default());
+        let io = FsIo::new(store.clone()).unwrap();
+        let file = io
+            .open_file("agent.db-wal", OpenFlags::Create, false)
+            .unwrap();
+        write(file.as_ref(), 0, &vec![7; BLOCK_SIZE]);
+        sync(file.as_ref()).unwrap();
+        assert_eq!(
+            store.objects.lock().unwrap().len(),
+            1,
+            "small WAL sync should only publish its self-contained manifest"
+        );
+        write(file.as_ref(), BLOCK_SIZE as u64, b"tail");
+        sync(file.as_ref()).unwrap();
+        assert!(
+            store
+                .objects
+                .lock()
+                .unwrap()
+                .contains_key(&format!("blocks/{}", digest(&vec![7; BLOCK_SIZE]))),
+            "previous inline block must be externalized before it is replaced"
+        );
+        store.block_gets.store(0, Ordering::Relaxed);
+        let fresh = FsIo::new(store.clone())
+            .unwrap()
+            .open_file("agent.db-wal", OpenFlags::None, false)
+            .unwrap();
+        let all = read(fresh.as_ref(), BLOCK_SIZE + 4);
+        assert!(all[..BLOCK_SIZE].iter().all(|v| *v == 7));
+        assert_eq!(&all[BLOCK_SIZE..], b"tail");
+        assert_eq!(
+            store.block_gets.load(Ordering::Relaxed),
+            1,
+            "embedded tail should need no separate GET"
+        );
+    }
+    #[test]
+    fn inline_budget_falls_back_to_verified_remote_blocks() {
+        let store = Arc::new(MemoryStore::default());
+        let io = FsIo::new(store.clone()).unwrap();
+        for (name, value) in [("first-wal", 1), ("second-wal", 2)] {
+            let file = io.open_file(name, OpenFlags::Create, false).unwrap();
+            write(file.as_ref(), 0, &vec![value; BLOCK_SIZE]);
+            sync(file.as_ref()).unwrap();
+        }
+        let state = io.inner.state.lock().unwrap();
+        assert!(state.manifest.files["first-wal"].inline.is_some());
+        assert!(state.manifest.files["second-wal"].inline.is_none());
+        drop(state);
+        let fresh = FsIo::new(store)
+            .unwrap()
+            .open_file("second-wal", OpenFlags::None, false)
+            .unwrap();
+        assert_eq!(read(fresh.as_ref(), BLOCK_SIZE), vec![2; BLOCK_SIZE]);
+    }
+    #[test]
+    fn legacy_v1_snapshots_upgrade_without_rewriting_untouched_data() {
+        let store = Arc::new(MemoryStore::default());
+        let hash = digest(b"legacy");
+        store.put(&format!("blocks/{hash}"), b"legacy", 0).unwrap();
+        let body=serde_json::to_vec(&serde_json::json!({"format":"turso-fs-v1","files":{"agent.db":{"size":6,"blocks":[hash]}}})).unwrap();
+        store.put("manifest.json", &body, 0).unwrap();
+        let io = FsIo::new(store.clone()).unwrap();
+        let file = io
+            .open_file("agent.db-wal", OpenFlags::Create, false)
+            .unwrap();
+        write(file.as_ref(), 0, b"new tail");
+        sync(file.as_ref()).unwrap();
+        assert_eq!(
+            io.inner.state.lock().unwrap().manifest.format,
+            "turso-fs-v2"
+        );
+        let fresh = FsIo::new(store)
+            .unwrap()
+            .open_file("agent.db", OpenFlags::None, false)
+            .unwrap();
+        assert_eq!(read(fresh.as_ref(), 6), b"legacy");
+    }
+    #[test]
     fn demand_reads_cache_eviction_and_partial_overwrites() {
         let store = Arc::new(MemoryStore::default());
         {
@@ -1000,3 +1259,6 @@ mod tests {
         assert_eq!(s.row().unwrap().get_value(0).to_string(), "ok");
     }
 }
+
+#[cfg(test)]
+mod http_tests;
