@@ -65,7 +65,7 @@ WAL pages; those reads are demand I/O too, not a pre-download of every file.
   immutable data, and publishes the manifest last. Unrelated blocks are not read
   during sync. Clean cached blocks can then be evicted safely.
 
-The directory uses the v2 adapter format:
+The storage directory contains:
 
 ```text
 manifest.json          # atomic map of logical database/WAL files
@@ -92,9 +92,7 @@ replaces them. If the inline budget is unavailable, normal block upload remains
 the fallback. This does not weaken `FULL` durability or defer an acknowledged
 commit into a background upload.
 
-The reader accepts both v1 and v2 snapshots. The first new sync upgrades
-a v1 manifest to v2; old v1 clients cannot read that upgraded directory. There
-is no automatic downgrade. Benchmark/smoke runs always use fresh directories.
+Benchmark and smoke runs use fresh directories.
 The optimized HTTP adapter requires an FS deployment with batch-write support.
 
 ## Durability and conflict behavior
@@ -174,7 +172,7 @@ python3 smoke.py
 Unit tests cover lazy reads, cache hits/eviction, full and partial overwrites,
 truncate/regrow, incremental sync, real Turso transactions and WAL recovery,
 lock ownership, stale writers, corrupt blocks/manifests, failed publication,
-lost acknowledgements, legacy-format upgrades, inline WAL rollover/budget,
+lost acknowledgements, manifest identity and integrity, inline WAL rollover/budget,
 batch limits, malformed acknowledgements, and partial batch failures. The manual live smoke commits 64 rows, kills the
 process with an open uncommitted transaction, recovers in a fresh sandbox,
 checks integrity and checkpoint/reopen behavior, and rejects a stale writer with

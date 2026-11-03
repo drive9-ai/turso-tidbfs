@@ -2,8 +2,9 @@
 
 ## Commit-path optimization — November 3, 2026
 
-Contemporaneous A/B comparison: original v1 adapter, optimized v2 adapter, and
-local disk. Three trials each, separate directories, alternating execution order.
+Contemporaneous A/B comparison of the adapter before and after optimization,
+with local disk as a control. Three trials each, separate directories,
+alternating execution order.
 Same release Turso 0.8.3 engine, `synchronous=FULL`, WAL, 1,024 rows with 512-byte
 payloads, and 256 KiB pager cache. Table values are medians of trial means.
 
@@ -40,8 +41,7 @@ Per-operation timing excludes connection setup, directory preparation, final
 integrity checks, and process teardown. No unrelated live-FS tests ran during
 these measurements.
 
-Readers accept v1 and v2. A new sync upgrades to v2; old v1 clients cannot read
-an upgraded directory. All measurements used fresh disposable paths.
+All measurements used fresh disposable paths.
 
 ### Verification and reproduction
 
@@ -57,7 +57,7 @@ are included in the raw data. To reproduce, build `bench` at each revision and
 pass the original binary using `--baseline-binary`:
 
 ```bash
-python3 benchmark.py --baseline-binary /path/to/v1/bench \
+python3 benchmark.py --baseline-binary /path/to/baseline/bench \
   --phases seed transactions --trials 3
 ```
 
@@ -70,5 +70,5 @@ python3 benchmark.py --baseline-binary /path/to/v1/bench \
 The earlier read run opened a 610,304-byte database with only one 32 KiB block
 and the 1,383-byte manifest. Repeated point queries downloaded zero additional
 bytes. Those read measurements are retained rather than repeated for this
-commit-path change. The v1 bulk-write results are superseded by the A/B table
+commit-path change. The earlier bulk-write results are superseded by the A/B table
 above; the earlier raw record preserves its excluded/replacement seed samples.

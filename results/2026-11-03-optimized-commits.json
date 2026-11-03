@@ -1310,10 +1310,10 @@
     "FS commit includes remote durability; local commit covers this machine's filesystem only.",
     "HTTP preparation and full integrity checks are outside per-operation timing.",
     "Single-row and batch commit samples are sequential, not concurrent.",
-    "The baseline uses the original v1 adapter; the optimized adapter uses batch block writes and a v2 inline WAL tail.",
+    "The comparison uses baseline and optimized adapters; the optimized path batches block writes and embeds the WAL tail.",
     "Only seed and transaction phases were rerun. Prior read measurements remain archived separately.",
     "Per-operation summaries are medians of three trial means. Local OS caches were not dropped.",
-    "uploaded_bytes counts request-body payloads (base64/JSON included for v2 batches), excluding headers and acknowledgement bodies."
+    "uploaded_bytes counts request-body payloads (base64/JSON included for batch uploads), excluding headers and acknowledgement bodies."
   ],
   "local_storage": "temporary directory on host filesystem (not tmpfs on macOS)",
   "summary": [

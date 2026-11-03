@@ -22,6 +22,7 @@ use turso_core::{
     },
 };
 
+const MANIFEST_FORMAT: &str = "turso-tidbfs";
 pub const BLOCK_SIZE: usize = 32 * 1024;
 const MAX_FILE: usize = 8 * 1024 * 1024;
 const MAX_MANIFEST: usize = 48 * 1024;
@@ -330,7 +331,7 @@ struct Manifest {
 impl Default for Manifest {
     fn default() -> Self {
         Self {
-            format: "turso-fs-v1".into(),
+            format: MANIFEST_FORMAT.into(),
             files: BTreeMap::new(),
         }
     }
@@ -442,9 +443,7 @@ impl FsIo {
             ),
             None => (Manifest::default(), 0),
         };
-        if !matches!(manifest.format.as_str(), "turso-fs-v1" | "turso-fs-v2")
-            || manifest.files.len() > MAX_FILES
-        {
+        if manifest.format != MANIFEST_FORMAT || manifest.files.len() > MAX_FILES {
             return Err(err("unsupported FS manifest"));
         }
         for (name, image) in &manifest.files {
@@ -461,7 +460,7 @@ impl FsIo {
                 return Err(err("invalid manifest file or block reference"));
             }
             if let Some(inline) = &image.inline {
-                if manifest.format != "turso-fs-v2" || image.blocks.last() != Some(&inline.hash) {
+                if image.blocks.last() != Some(&inline.hash) {
                     return Err(err("invalid inline block reference"));
                 }
                 let bytes = BASE64
@@ -574,7 +573,6 @@ impl Inner {
                 }
             }
             let mut manifest = state.manifest.clone();
-            manifest.format = "turso-fs-v2".into();
             manifest.files.insert(name.to_owned(), image);
             if serde_json::to_vec(&manifest)
                 .map_err(|_| err("encode manifest"))?
@@ -959,27 +957,54 @@ mod tests {
         assert_eq!(read(fresh.as_ref(), BLOCK_SIZE), vec![2; BLOCK_SIZE]);
     }
     #[test]
-    fn legacy_v1_snapshots_upgrade_without_rewriting_untouched_data() {
+    fn manifest_identity_and_inline_integrity_are_checked() {
         let store = Arc::new(MemoryStore::default());
-        let hash = digest(b"legacy");
-        store.put(&format!("blocks/{hash}"), b"legacy", 0).unwrap();
-        let body=serde_json::to_vec(&serde_json::json!({"format":"turso-fs-v1","files":{"agent.db":{"size":6,"blocks":[hash]}}})).unwrap();
-        store.put("manifest.json", &body, 0).unwrap();
         let io = FsIo::new(store.clone()).unwrap();
         let file = io
             .open_file("agent.db-wal", OpenFlags::Create, false)
             .unwrap();
-        write(file.as_ref(), 0, b"new tail");
+        write(file.as_ref(), 0, b"inline");
         sync(file.as_ref()).unwrap();
-        assert_eq!(
-            io.inner.state.lock().unwrap().manifest.format,
-            "turso-fs-v2"
-        );
+        let (body, revision) = store.get("manifest.json").unwrap().unwrap();
+        let original: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(original["format"], MANIFEST_FORMAT);
+        for damage in ["identity", "reference", "encoding", "length", "checksum"] {
+            let mut manifest = original.clone();
+            match damage {
+                "identity" => manifest["format"] = serde_json::json!("unrelated-storage"),
+                "reference" => {
+                    manifest["files"]["agent.db-wal"]["inline"]["hash"] =
+                        serde_json::json!("0".repeat(64))
+                }
+                "encoding" => {
+                    manifest["files"]["agent.db-wal"]["inline"]["data"] =
+                        serde_json::json!("invalid%base64")
+                }
+                "length" => {
+                    manifest["files"]["agent.db-wal"]["inline"]["data"] =
+                        serde_json::json!(BASE64.encode(b"short"))
+                }
+                _ => {
+                    manifest["files"]["agent.db-wal"]["inline"]["data"] =
+                        serde_json::json!(BASE64.encode(b"broken"))
+                }
+            }
+            store.objects.lock().unwrap().insert(
+                "manifest.json".into(),
+                (serde_json::to_vec(&manifest).unwrap(), revision),
+            );
+            assert!(FsIo::new(store.clone()).is_err(), "must reject {damage}");
+        }
+        store
+            .objects
+            .lock()
+            .unwrap()
+            .insert("manifest.json".into(), (body, revision));
         let fresh = FsIo::new(store)
             .unwrap()
-            .open_file("agent.db", OpenFlags::None, false)
+            .open_file("agent.db-wal", OpenFlags::None, false)
             .unwrap();
-        assert_eq!(read(fresh.as_ref(), 6), b"legacy");
+        assert_eq!(read(fresh.as_ref(), 6), b"inline");
     }
     #[test]
     fn demand_reads_cache_eviction_and_partial_overwrites() {
@@ -1219,7 +1244,7 @@ mod tests {
                 )
                 .is_err()
         );
-        let invalid = br#"{"format":"turso-fs-v1","files":{"../escape":{"size":0,"blocks":[]}}}"#;
+        let invalid = br#"{"format":"turso-tidbfs","files":{"../escape":{"size":0,"blocks":[]}}}"#;
         store
             .objects
             .lock()
