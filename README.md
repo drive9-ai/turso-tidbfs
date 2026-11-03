@@ -1,50 +1,56 @@
 # turso-tidbfs
 
-**Run SQL in an agent's sandbox. Keep the saved data in TiDB Filesystem.**
+**SQL state that outlives your agents.**
 
-[Turso](https://github.com/tursodatabase/turso) is a SQLite-compatible database
-engine. This project gives it native I/O backed by
-[TiDB Filesystem](https://www.pingcap.com/tidb/tidb-cloud-filesystems/), so a new
-process can reopen the same committed data after the original process exits.
+[Turso](https://github.com/tursodatabase/turso) runs a SQLite-compatible database
+engine inside your application. This project gives it native I/O over HTTPS,
+with database blocks and WAL stored in
+[TiDB Filesystem](https://www.pingcap.com/tidb/tidb-cloud-filesystems/).
 
-```text
-Your application → SQL → Turso in your process → HTTPS → TiDB Filesystem
-```
+An agent can commit its progress, readers can follow new results, and another
+agent can reopen the same data when the original sandbox is replaced. SQL runs
+locally in each process; committed state lives in shared storage.
 
-No FUSE mount or local database file is needed. This is an early prototype;
-each remote database directory supports one writer and multiple snapshot readers.
+![Writer A commits SQL state to TiDB Filesystem. Reader B follows new commits while Reader C keeps its transaction snapshot. Writer D takes over after lease expiry; the old writer is refused. Reader C catches up after ending its transaction.](assets/overview.gif)
+
+*Illustrative animation; timing is compressed.*
+[Static diagram](assets/overview.png) · [Real remote verification](results/follow.md)
 
 ## Why use it?
 
-An agent can build up useful state across many steps: which documents it has
-processed, which tasks are finished, and what its tools returned. When that
-state lives only on a sandbox's disk, replacing the sandbox can lose the work.
+Agent workflows build up useful structured state: processed document IDs,
+unfinished tasks, tool results and checkpoints. Keeping that state in a shared
+SQL database lets the work continue beyond the lifetime of one process.
 
-`turso-tidbfs` lets your application keep that structured state in SQL tables
-with committed data stored in TiDB Filesystem. A new process can open the same
-filesystem and database directory, query the saved records, and use them to
-continue the task.
+- **Resume after replacing a sandbox.** A new agent opens the existing database
+  and queries the saved progress instead of rebuilding that state from scratch.
+- **Let agents read shared progress.** One writer updates the database while
+  independent readers automatically follow committed changes. A long-running
+  read transaction keeps a consistent snapshot until it finishes.
+- **Let agents take turns writing.** A clean exit releases the writer lease.
+  After a failure, a replacement can acquire ownership once the lease expires;
+  the old process cannot publish stale writes after takeover.
+- **Read only the data you need.** Native I/O fetches 32 KiB blocks on demand,
+  and following snapshots reuse a shared cache. No FUSE mount, local database
+  file, or complete database download is needed. Directory-scoped FS tokens
+  let an agent access just its database directory.
 
-- **Keep progress across restarts.** Store task status, processing checkpoints,
-  and results independently of the process that produced them.
-- **Query the state your agent needs.** Use SQL to find unfinished work, inspect
-  results, and update related records in a transaction.
-- **Use your workspace's storage and permissions.** Database state can live
-  alongside input files and generated artifacts in the same FS namespace,
-  with access delegated through directory-scoped tokens.
-- **Read data as it is needed.** Native I/O fetches blocks on demand, so opening
-  a database does not require downloading the complete database file or
-  mounting a filesystem.
+For example, a research pipeline can keep source papers and generated artifacts
+in FS, with processed paper IDs, task status and summaries in SQL. A collector
+writes progress, a summarizer reads new results, and a reporting agent holds a
+stable read transaction. Replacing the collector does not discard its committed
+records; the next collector can query them and continue the workflow.
+Your application decides how to resume work from those saved records.
 
-For example, a research agent can commit the IDs of documents it has processed
-and keep large source files in FS. After that process exits, another process
-opens the same database and queries which documents remain. Your application
-uses those recovered records to decide what the agent should do next and
-provides the logic for resuming its workflow.
+The [remote following test](results/follow.md) keeps the same two reader
+processes alive through commits, checkpoint, WAL reset, schema changes, a reader
+network outage and writer takeover. The [handoff checks](results/handoff.md)
+verify that restoring an old writer cannot let it commit after replacement.
 
-This prototype fits small databases and commits at task boundaries. See
-[performance](results/README.md) for remote commit costs and [limits](#limits)
-for the current size and concurrency bounds.
+This is an early prototype for small, task-oriented databases: **one writer per
+directory, asynchronously following readers, and 8 MiB per logical file**.
+Batch updates at task boundaries; see [measured performance](results/README.md)
+for remote commit costs and [limits](#limits) for the current boundaries.
 
 ## Getting started
 
@@ -449,10 +455,13 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-The engine is pinned to Turso **0.8.3**. Python scripts use only the standard
-library. They build release binaries when needed; use `TURSO_FS_BINARY` or
+The engine is pinned to Turso **0.8.3**. Runtime and test Python scripts use only
+the standard library. They build release binaries when needed; use `TURSO_FS_BINARY` or
 `TURSO_FS_BENCH_BINARY` to reuse a specific build, and `CARGO_TARGET_DIR` to
 choose a build directory. With a custom target directory, adjust the executable
 paths in the walkthrough accordingly.
+
+The optional [README animation renderer](docs/animation/README.md) uses Pillow
+and FFmpeg, with its own dependency and build instructions.
 
 An optional GitHub Actions template is in `ci/github-actions.yml`.
