@@ -1,4 +1,4 @@
-//! Experimental Turso I/O over Drive9 HTTP. No local database files or FUSE.
+//! Experimental Turso I/O over TiDB Filesystem HTTP. No local database files or FUSE.
 //!
 //! Each session reads an immutable snapshot. One CAS manifest publishes all file
 //! versions; stale writers fail closed. Do not rebase or retry failed sessions.
@@ -1252,6 +1252,72 @@ mod tests {
             .insert("manifest.json".into(), (invalid.to_vec(), 100));
         assert!(FsIo::new(store).is_err());
     }
+    #[test]
+    fn shared_database_connections_keep_reader_snapshots_and_exclude_second_writer() {
+        fn value(c: &Arc<turso_core::Connection>) -> String {
+            let mut s = c
+                .query("SELECT value FROM items WHERE id=1")
+                .unwrap()
+                .unwrap();
+            assert!(matches!(s.step().unwrap(), StepResult::Row));
+            let value = s.row().unwrap().get_value(0).to_string();
+            assert!(matches!(s.step().unwrap(), StepResult::Done));
+            value
+        }
+
+        let store = Arc::new(MemoryStore::default());
+        let io = Arc::new(FsIo::new(store.clone()).unwrap());
+        let db = Database::open_file(io, "agent.db", Arc::new(SqliteDialect)).unwrap();
+        let writer = db.connect().unwrap();
+        let reader = db.connect().unwrap();
+        let contender = db.connect().unwrap();
+        writer.execute("PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=0; CREATE TABLE items(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO items VALUES(1,'initial');").unwrap();
+
+        reader.execute("BEGIN").unwrap();
+        assert_eq!(value(&reader), "initial");
+        writer
+            .execute("BEGIN IMMEDIATE; UPDATE items SET value='committed' WHERE id=1;")
+            .unwrap();
+        assert_eq!(
+            value(&reader),
+            "initial",
+            "uncommitted data must stay hidden"
+        );
+        assert!(matches!(
+            contender.execute("BEGIN IMMEDIATE"),
+            Err(LimboError::Busy)
+        ));
+        writer.execute("COMMIT").unwrap();
+        assert_eq!(
+            value(&reader),
+            "initial",
+            "reader must retain its snapshot after commit"
+        );
+        reader.execute("COMMIT").unwrap();
+        assert_eq!(value(&reader), "committed");
+        contender
+            .execute("BEGIN IMMEDIATE; UPDATE items SET value='next' WHERE id=1; COMMIT;")
+            .unwrap();
+        assert_eq!(
+            value(&reader),
+            "next",
+            "writer ownership must pass after commit"
+        );
+
+        reader.close().unwrap();
+        contender.close().unwrap();
+        writer.close().unwrap();
+        drop(db);
+        let io = Arc::new(FsIo::new(store).unwrap());
+        let db = Database::open_file(io, "agent.db", Arc::new(SqliteDialect)).unwrap();
+        let reopened = db.connect().unwrap();
+        assert_eq!(
+            value(&reopened),
+            "next",
+            "commits must survive a fresh session"
+        );
+    }
+
     #[test]
     fn turso_transactions_checkpoint_and_wal_recovery() {
         let store = Arc::new(MemoryStore::default());

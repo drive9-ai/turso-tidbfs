@@ -146,11 +146,11 @@ issue a token that can read and write only that directory:
 ```bash
 export FS_ROOT="/apps/turso-demo"
 
-export DRIVE9_BASE="$(ti fs check-file-system \
+export TIDBFS_ENDPOINT="$(ti fs check-file-system \
   --file-system-id "$FS_ID" \
   --query endpoint.base_url --output text)"
 
-export DRIVE9_API_KEY="$(ti fs generate-file-system-scoped-token \
+export TIDBFS_TOKEN="$(ti fs generate-file-system-scoped-token \
   --file-system-id "$FS_ID" \
   --subject turso-tidbfs \
   --ttl 24h \
@@ -164,8 +164,8 @@ Keep these variables in the terminal where you will run the program:
 | --- | --- |
 | `FS_ID` | The filesystem selected in `ti`; used to manage access. |
 | `FS_ROOT` | A remote directory containing this database's state. |
-| `DRIVE9_BASE` | The HTTPS endpoint for that filesystem's region. |
-| `DRIVE9_API_KEY` | The FS token used by this program, not a Cloud API key. |
+| `TIDBFS_ENDPOINT` | The HTTPS endpoint for that filesystem's region. |
+| `TIDBFS_TOKEN` | The FS token used by this program, not a Cloud API key. |
 
 The token expires after 24 hours. Repeat the token-generation command to renew
 access to the same data. Keep tokens out of source files and Git commits.
@@ -227,7 +227,7 @@ remote directory starts a different database.
 
 In a new terminal on the same machine, set the same `FS_ID` and `FS_ROOT`, then
 repeat the endpoint/token commands from step 3. To use a separate sandbox,
-build the executable there and pass it `DRIVE9_BASE`, `DRIVE9_API_KEY`, and
+build the executable there and pass it `TIDBFS_ENDPOINT`, `TIDBFS_TOKEN`, and
 `FS_ROOT`. Generate that scoped token on your trusted machine; the sandbox
 needs neither Cloud API keys nor the filesystem's owner token. Reuse the
 existing filesystem rather than creating another one.
@@ -246,7 +246,7 @@ stored owner token. Clear the interactive example's environment variables for
 this command only, since its token is limited to `/apps/turso-demo`:
 
 ```bash
-env -u DRIVE9_BASE -u DRIVE9_API_KEY \
+env -u TIDBFS_ENDPOINT -u TIDBFS_TOKEN \
   python3 smoke.py --fs-id "$FS_ID"
 ```
 
@@ -258,7 +258,7 @@ Results are written to `output/results.json`.
 ## Compare with local disk
 
 ```bash
-env -u DRIVE9_BASE -u DRIVE9_API_KEY \
+env -u TIDBFS_ENDPOINT -u TIDBFS_TOKEN \
   python3 benchmark.py --fs-id "$FS_ID" --trials 3
 ```
 
@@ -273,7 +273,7 @@ local owner token, `--fs-id` can be omitted. They generate 30-minute tokens and
 unique directories under `/demos/turso/` and `/demos/turso-bench/`. Test data is
 retained remotely for inspection.
 
-If you set `DRIVE9_BASE` and `DRIVE9_API_KEY` explicitly for these scripts, that
+If you set `TIDBFS_ENDPOINT` and `TIDBFS_TOKEN` explicitly for these scripts, that
 token must allow their `/demos/` paths. A token limited to the interactive
 example's directory cannot access those test directories.
 
@@ -283,7 +283,7 @@ example's directory cannot access those test directories.
 | --- | --- |
 | `ti: command not found` | Add `$HOME/.ti/bin` to `PATH`. |
 | Linker or C compiler missing | Install Xcode Command Line Tools on macOS, or `build-essential` on Ubuntu/Debian. |
-| Missing environment variable | Set `DRIVE9_BASE` and `DRIVE9_API_KEY` in the terminal running `turso-fs`. |
+| Missing environment variable | Set `TIDBFS_ENDPOINT` and `TIDBFS_TOKEN` in the terminal running `turso-fs`. |
 | No local owner token | Use the existing-filesystem instructions in step 3 to generate or import one. |
 | HTTP 401 | Issue a new FS token; the current one may have expired or been revoked. |
 | HTTP 403 | Check that the token permits `read,list,write` for `FS_ROOT`. For scripts, use their CLI-token mode shown above. |
@@ -298,6 +298,28 @@ A small WAL tail can be stored directly in that manifest. The program uses
 
 See [storage design](docs/storage.md) for the I/O interfaces, cache, commit
 protocol, and failure behavior.
+
+## Concurrent access
+
+Concurrency depends on whether connections share the same engine instance:
+
+| Usage | Current behavior |
+| --- | --- |
+| Multiple connections from one shared Turso `Database` | Readers can hold snapshots while one write transaction commits. A second write transaction receives `Busy` until the first finishes. |
+| Separate processes or separate `FsIo` instances opening the same directory | Each sees its own manifest snapshot. There is no automatic refresh or remote database lock. A stale writer's publication fails; discard that session and reopen. Use one active session per directory. |
+| Separate databases in separate remote directories | Independent manifests; applications can run them concurrently. |
+
+The bundled command-line program uses one connection and executes input lines
+sequentially. To use multiple connections in an application, create one `FsIo`
+and one Turso `Database`, then obtain connections with `db.connect()`. The
+adapter uses blocking HTTP and a shared state mutex, so concurrent SQL
+connections do not imply parallel block I/O.
+
+The connection regression test covers a reader retaining its snapshot across
+a writer's commit, rejection of a second writer, transfer of write ownership,
+and reopening the committed data. This project does not provide multi-process
+shared WAL coordination, distributed write ownership, or concurrent writers
+to the same database.
 
 ## Limits
 

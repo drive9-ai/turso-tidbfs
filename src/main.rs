@@ -7,14 +7,14 @@ use turso_fs::{FsIo, HttpStore};
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let root = args.next().ok_or("usage: turso-fs /remote/directory [database.db] < statements.sql\nSet DRIVE9_BASE and DRIVE9_API_KEY. One complete SQL batch per input line.")?;
+    let root = args.next().ok_or("usage: turso-fs /remote/directory [database.db] < statements.sql\nSet TIDBFS_ENDPOINT and TIDBFS_TOKEN. One complete SQL batch per input line.")?;
     let name = args.next().unwrap_or_else(|| "agent.db".into());
     if args.next().is_some() {
         return Err("too many arguments".into());
     }
     let store = Arc::new(HttpStore::new(
-        &std::env::var("DRIVE9_BASE")?,
-        std::env::var("DRIVE9_API_KEY")?,
+        &std::env::var("TIDBFS_ENDPOINT")?,
+        std::env::var("TIDBFS_TOKEN")?,
         &root,
     )?);
     store.prepare()?;

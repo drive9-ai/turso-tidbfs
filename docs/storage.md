@@ -66,9 +66,17 @@ block garbage collection yet.
 Use **one active session per directory**. This is optimistic conflict detection,
 not a distributed lock service. Separate sessions read their own snapshots and
 can make a previous writer's next sync fail. File locks coordinate handles only
-within one adapter session. Multiple connections sharing one Turso Database use
-the engine's normal coordination. Shared multi-process WAL / `.tshm`, MVCC,
-partial sync, and Turso Cloud sync are outside this implementation.
+within one adapter session. Connections created from one shared Turso `Database`
+support reader snapshots and one write transaction at a time; a competing writer
+gets `Busy`. Separate `FsIo` instances do not share that coordination, even in
+the same process. Their manifests are loaded once and are not automatically
+refreshed. Use different remote directories for independent databases.
+
+The adapter's shared state mutex serializes file access, including blocking
+HTTP calls. Supporting overlapping SQL transactions is not a claim of parallel
+block transfers. The command-line program uses a single sequential connection.
+Shared multi-process WAL / `.tshm`, remote database locks and session takeover,
+MVCC, partial sync, and Turso Cloud sync are outside this implementation.
 
 
 [Back to the getting-started guide](../README.md)

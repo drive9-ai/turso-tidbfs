@@ -34,7 +34,7 @@ def main():
     # Reports record only host/machine information, never credentials or signed URLs.
     report = {"recorded_at": datetime.now(timezone.utc).isoformat(), "machine": platform.platform(),
               "turso_core": "0.8.3", "build": "release", "trials": args.trials,
-              "fs_host": __import__("urllib.parse", fromlist=["urlparse"]).urlparse(env["DRIVE9_BASE"]).hostname,
+              "fs_host": __import__("urllib.parse", fromlist=["urlparse"]).urlparse(env["TIDBFS_ENDPOINT"]).hostname,
               "remote_root": root, "runs": [],
               "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
               "notes": ["Same Turso engine and SQL; synchronous=FULL, WAL, auto-checkpoint disabled.",

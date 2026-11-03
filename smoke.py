@@ -23,7 +23,7 @@ def ti(args, profile):
 
 
 def access(args, root):
-    if os.environ.get("DRIVE9_BASE") and os.environ.get("DRIVE9_API_KEY"):
+    if os.environ.get("TIDBFS_ENDPOINT") and os.environ.get("TIDBFS_TOKEN"):
         return dict(os.environ)
     fs_id = args.fs_id
     if not fs_id:
@@ -39,7 +39,7 @@ def access(args, root):
     endpoint = next(x["message"] for x in plan["checks"]
                     if x["name"] == "endpoint_selection" and x["status"] == "passed")
     token = ti(command, args.profile)["fs_token"]
-    return {**os.environ, "DRIVE9_BASE": endpoint, "DRIVE9_API_KEY": token}
+    return {**os.environ, "TIDBFS_ENDPOINT": endpoint, "TIDBFS_TOKEN": token}
 
 
 class Session:

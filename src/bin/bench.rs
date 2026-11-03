@@ -56,8 +56,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "local" => (None, Arc::new(UnixIO::new()?), args[2].clone()),
         "fs" => {
             let store = Arc::new(HttpStore::new(
-                &std::env::var("DRIVE9_BASE")?,
-                std::env::var("DRIVE9_API_KEY")?,
+                &std::env::var("TIDBFS_ENDPOINT")?,
+                std::env::var("TIDBFS_TOKEN")?,
                 &args[2],
             )?);
             store.prepare()?;
