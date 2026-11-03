@@ -1,0 +1,25 @@
+{
+  "root": "/demos/turso/5dbf840678bb4e3a9f0c6a8f9f24ee67",
+  "checks": [
+    "committed transaction acknowledged, then SIGKILL with open transaction",
+    "fresh process recovers WAL; uncommitted row absent; integrity_check=ok",
+    "stale process rejected by remote manifest CAS (HTTP 409)",
+    "checkpoint/reopen preserves winning commit; no local database files"
+  ],
+  "pids": [
+    21574,
+    21590,
+    21603,
+    21606,
+    21633
+  ],
+  "metrics": [
+    "FS transfer metrics: {\"gets\":5,\"puts\":2,\"batch_requests\":1,\"downloaded_bytes\":114742,\"uploaded_bytes\":111091}",
+    "FS transfer metrics: {\"gets\":3,\"puts\":4,\"batch_requests\":1,\"downloaded_bytes\":65846,\"uploaded_bytes\":45614}",
+    "FS transfer metrics: {\"gets\":4,\"puts\":0,\"batch_requests\":0,\"downloaded_bytes\":98614,\"uploaded_bytes\":0}"
+  ],
+  "elapsed_seconds": 24.13,
+  "notes": [
+    "The correctness smoke preceded a byte-counter-only adjustment: its batch uploaded_bytes count decoded block content. Final benchmark counters count encoded HTTP request payloads. Request data and durability semantics are unchanged."
+  ]
+}

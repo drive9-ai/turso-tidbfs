@@ -1,55 +1,74 @@
-# Recorded comparison — November 3, 2026
+# Benchmark results
 
-Same release Turso 0.8.3 engine; WAL, `synchronous=FULL`, 256 KiB pager cache.
-Fixture: 1,024 rows × 512-byte payload. Local APFS versus the real FS endpoint
-recorded in the JSON report. Three samples per summary group; table values are
-the median of trial-average latencies. No database files were used by the FS backend.
+## Commit-path optimization — November 3, 2026
 
-| Operation | Local (ms) | FS (ms) |
-| --- | ---: | ---: |
-| Insert within transaction (per row) | 0.004442 | 0.009 |
-| Bulk commit (1,024 rows) | 0.474584 | 15436.925 |
-| Distributed first pass (per query) | 0.016211 | 185.580 |
-| Repeated cached point read (per query) | 0.006610 | 0.018 |
-| Single-row commit | 0.064177 | 1370.591 |
-| 32-row batch commit | 0.085931 | 1739.608 |
-| Checkpoint + truncate | 0.372708 | 16120.574 |
+Contemporaneous A/B comparison: original v1 adapter, optimized v2 adapter, and
+local disk. Three trials each, separate directories, alternating execution order.
+Same release Turso 0.8.3 engine, `synchronous=FULL`, WAL, 1,024 rows with 512-byte
+payloads, and 256 KiB pager cache. Table values are medians of trial means.
 
-The initial seed pair overlapped crash verification and was excluded. An
-isolated replacement pair restores three seed samples. Both the excluded raw
-runs and the replacement are retained in the JSON for auditability.
+| Operation | Local (ms) | FS before (ms) | FS after (ms) | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| Commit 1,024 inserted rows | 0.487 | 15591.9 | 2918.1 | 5.34× |
+| Checkpoint + truncate | 0.530 | 15810.0 | 2408.7 | 6.56× |
+| Single-row commit | 0.063 | 1351.3 | 553.4 | 2.44× |
+| 32-row batch commit | 0.108 | 1772.8 | 811.6 | 2.18× |
 
-## Demand-read evidence
+### Request reduction
 
-Every remote read-phase open fetched **one 32 KiB data block plus the 1,383-byte
-manifest** (34,151 bytes), rather than the entire 610,304-byte database.
-The distributed pass fetched 17 further blocks; repeated queries fetched
-**zero additional bytes**. The full scan then fetched just the remaining
-20,480-byte tail. `point_read_one` targets id=0 in the header-adjacent cached
-block and must not be interpreted as a cold remote lookup.
+The 1,024-row commit previously made 19 existence GETs, 19 individual data PUTs,
+and one manifest PUT (**39 requests**). The optimized path makes one block-batch
+POST and one manifest PUT (**2 requests**), with zero existence GETs. The raw
+report includes these per-phase counts. Small WAL-tail updates can be contained
+entirely in one CAS manifest PUT; rollover first externalizes the old inline
+block when it remains referenced.
 
-## What the comparison means
+The inline optimization trades extra base64/JSON payload bytes for fewer round
+trips. It obeys the existing 48 KiB manifest budget and falls back to external
+blocks when the budget is exhausted. Batch uploads respect 128 items / 4 MiB
+decoded content per request. Manifest publication waits for every block result;
+a mixed/uncertain/error acknowledgement fails the session rather than publishing
+incomplete data.
 
-The reader now avoids eager downloads and dirty updates retain untouched block
-references. Cache-hit queries are close to local engine costs. Cold blocks and
-commits remain dominated by sequential remote round trips. For example, the
-bulk commit issues 19 block existence GETs, 19 block PUTs, and one manifest PUT.
-These numbers identify the next optimization targets; they do not establish
-production capacity or concurrency performance.
+### Limits and remaining costs
 
-Local OS caches were not dropped, so the baseline is normal local filesystem
-performance, not a cold SSD test. Local fsync protects a local filesystem,
-whereas FS sync includes remote publication. HTTP preparation and final
-integrity checks are outside individual operation timings. Full-scan figures
-in the raw JSON are per row and follow the distributed read pass.
+The FS path still has substantial network and server work. This does not claim
+local-disk latency or production capacity. Local fsync covers a local filesystem;
+FS sync includes remote publication. OS caches were not dropped. SQL writes
+inside a transaction are buffered and are not a durable-commit measurement.
+Per-operation timing excludes connection setup, directory preparation, final
+integrity checks, and process teardown. No unrelated live-FS tests ran during
+these measurements.
 
-## Correctness
+Readers accept v1 and v2. A new sync upgrades to v2; old v1 clients cannot read
+an upgraded directory. All measurements used fresh disposable paths.
 
-Eight focused Rust tests, Clippy with warnings denied, and formatting checks
-passed. The real-FS smoke verified SIGKILL/WAL recovery, loss of uncommitted
-rows, integrity checks, checkpoint/reopen, stale-writer rejection, and absence
-of local database files.
+### Verification and reproduction
 
-[Raw benchmark data](2026-11-03-benchmark.json) · [Live smoke](2026-11-03-smoke.json)
+Sixteen targeted checks passed: eleven core/store/Turso checks and five HTTP
+checks covering batch limits, conflicts, malformed acknowledgements, and partial
+failure. Clippy (warnings denied), formatting, and secret scanning passed. The
+real-FS smoke passed crash/WAL recovery, rollback visibility, integrity, checkpoint
+and reopen, stale-writer rejection, and absence of local database files.
 
-Reproduce with `python3 benchmark.py --trials 3` and `python3 smoke.py`.
+The original executable was built from `83946ff`; the optimized implementation
+is `6a1b715`. Both executable SHA-256 hashes and all per-transaction samples
+are included in the raw data. To reproduce, build `bench` at each revision and
+pass the original binary using `--baseline-binary`:
+
+```bash
+python3 benchmark.py --baseline-binary /path/to/v1/bench \
+  --phases seed transactions --trials 3
+```
+
+[Raw A/B data](2026-11-03-optimized-commits.json) · [Optimized recovery smoke](2026-11-03-optimized-smoke.json)
+
+## Earlier demand-read baseline
+
+[Original local/FS comparison](2026-11-03-benchmark.json) · [Original recovery smoke](2026-11-03-smoke.json)
+
+The earlier read run opened a 610,304-byte database with only one 32 KiB block
+and the 1,383-byte manifest. Repeated point queries downloaded zero additional
+bytes. Those read measurements are retained rather than repeated for this
+commit-path change. The v1 bulk-write results are superseded by the A/B table
+above; the earlier raw record preserves its excluded/replacement seed samples.
