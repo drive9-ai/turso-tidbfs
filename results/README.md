@@ -1,74 +1,57 @@
-# Benchmark results
+# Performance
 
-## Commit-path optimization — November 3, 2026
+Recorded November 3, 2026. TiDB Filesystem and local disk use the same
+release-built Turso 0.8.3 engine, WAL mode, `synchronous=FULL`, and a 256 KiB
+pager cache. The fixture contains 1,024 rows with 512-byte payloads.
 
-Contemporaneous A/B comparison of the adapter before and after optimization,
-with local disk as a control. Three trials each, separate directories,
-alternating execution order.
-Same release Turso 0.8.3 engine, `synchronous=FULL`, WAL, 1,024 rows with 512-byte
-payloads, and 256 KiB pager cache. Table values are medians of trial means.
+Three trials use fresh directories and separate processes for data creation
+and transaction measurements. Execution order alternates between FS and local
+disk. Values below are medians of trial-average latencies.
 
-| Operation | Local (ms) | FS before (ms) | FS after (ms) | Speedup |
-| --- | ---: | ---: | ---: | ---: |
-| Commit 1,024 inserted rows | 0.487 | 15591.9 | 2918.1 | 5.34× |
-| Checkpoint + truncate | 0.530 | 15810.0 | 2408.7 | 6.56× |
-| Single-row commit | 0.063 | 1351.3 | 553.4 | 2.44× |
-| 32-row batch commit | 0.108 | 1772.8 | 811.6 | 2.18× |
+| Operation | Local disk (ms) | TiDB Filesystem (ms) |
+| --- | ---: | ---: |
+| Insert within a transaction, per row | 0.0035 | 0.0079 |
+| Commit 1,024 inserted rows | 0.4874 | 2918.1354 |
+| Checkpoint + truncate | 0.5299 | 2408.6717 |
+| Single-row commit | 0.0628 | 553.3741 |
+| 32-row batch commit | 0.1077 | 811.6024 |
 
-### Request reduction
+## Storage behavior
 
-The 1,024-row commit previously made 19 existence GETs, 19 individual data PUTs,
-and one manifest PUT (**39 requests**). The optimized path makes one block-batch
-POST and one manifest PUT (**2 requests**), with zero existence GETs. The raw
-report includes these per-phase counts. Small WAL-tail updates can be contained
-entirely in one CAS manifest PUT; rollover first externalizes the old inline
-block when it remains referenced.
+The 1,024-row commit uses one block-batch request followed by a conditional
+manifest PUT. Small WAL-tail updates can be contained in a single manifest
+PUT. Referenced blocks are durable before the manifest is published, and
+uncertain or failed acknowledgements stop the session.
 
-The inline optimization trades extra base64/JSON payload bytes for fewer round
-trips. It obeys the existing 48 KiB manifest budget and falls back to external
-blocks when the budget is exhausted. Batch uploads respect 128 items / 4 MiB
-decoded content per request. Manifest publication waits for every block result;
-a mixed/uncertain/error acknowledgement fails the session rather than publishing
-incomplete data.
+## Measurement conditions
 
-### Limits and remaining costs
+Local results retain normal OS caching. Local fsync covers the host filesystem;
+FS sync includes remote publication. Writes inside a transaction are buffered;
+the commit measurements include the durability barrier. Directory preparation,
+connection setup, integrity checks, and process teardown are excluded from
+per-operation timing. These are sequential microbenchmarks rather than a
+concurrency or capacity measurement.
 
-The FS path still has substantial network and server work. This does not claim
-local-disk latency or production capacity. Local fsync covers a local filesystem;
-FS sync includes remote publication. OS caches were not dropped. SQL writes
-inside a transaction are buffered and are not a durable-commit measurement.
-Per-operation timing excludes connection setup, directory preparation, final
-integrity checks, and process teardown. No unrelated live-FS tests ran during
-these measurements.
+The raw report records the machine, FS endpoint host, executable hash, measured
+source revision, individual samples, and HTTP request counters.
 
-All measurements used fresh disposable paths.
-
-### Verification and reproduction
-
-Sixteen targeted checks passed: eleven core/store/Turso checks and five HTTP
-checks covering batch limits, conflicts, malformed acknowledgements, and partial
-failure. Clippy (warnings denied), formatting, and secret scanning passed. The
-real-FS smoke passed crash/WAL recovery, rollback visibility, integrity, checkpoint
-and reopen, stale-writer rejection, and absence of local database files.
-
-The original executable was built from `83946ff`; the optimized implementation
-is `6a1b715`. Both executable SHA-256 hashes and all per-transaction samples
-are included in the raw data. To reproduce, build `bench` at each revision and
-pass the original binary using `--baseline-binary`:
+## Reproduce
 
 ```bash
-python3 benchmark.py --baseline-binary /path/to/baseline/bench \
-  --phases seed transactions --trials 3
+python3 benchmark.py --phases seed transactions --trials 3
 ```
 
-[Raw A/B data](2026-11-03-optimized-commits.json) · [Optimized recovery smoke](2026-11-03-optimized-smoke.json)
+Run `python3 benchmark.py --trials 3` to include point reads and a full scan.
 
-## Earlier demand-read baseline
+## Correctness
 
-[Original local/FS comparison](2026-11-03-benchmark.json) · [Original recovery smoke](2026-11-03-smoke.json)
+The recovery check commits a transaction, kills the process with another
+transaction open, and restores it in a fresh sandbox. It verifies committed
+rows, absence of uncommitted rows, database integrity, checkpoint/reopen,
+stale-writer rejection, and absence of local database files.
 
-The earlier read run opened a 610,304-byte database with only one 32 KiB block
-and the 1,383-byte manifest. Repeated point queries downloaded zero additional
-bytes. Those read measurements are retained rather than repeated for this
-commit-path change. The earlier bulk-write results are superseded by the A/B table
-above; the earlier raw record preserves its excluded/replacement seed samples.
+```bash
+python3 smoke.py
+```
+
+[Benchmark data](benchmark.json) · [Recovery verification](recovery.json)

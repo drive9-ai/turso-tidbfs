@@ -75,7 +75,7 @@ blocks/<sha256>        # immutable blocks; last block can be shorter
 These objects are adapter storage, not ordinary SQLite files that another
 filesystem client can open directly.
 
-### Fewer commit round trips
+### Commit protocol
 
 New immutable blocks are sent through `/v1/fs:batch-write`, up to 128 blocks per
 request (4 MiB decoded content). There are no existence GETs before a create.
@@ -93,7 +93,7 @@ the fallback. This does not weaken `FULL` durability or defer an acknowledged
 commit into a background upload.
 
 Benchmark and smoke runs use fresh directories.
-The optimized HTTP adapter requires an FS deployment with batch-write support.
+The HTTP adapter requires an FS deployment with batch-write support.
 
 ## Durability and conflict behavior
 
@@ -123,8 +123,8 @@ python3 benchmark.py --trials 3
 ```
 
 Both backends use the **same release-built Turso 0.8.3 engine**, SQL workload,
-`FULL` synchronous mode, and 256 KiB pager cache. The local baseline uses Turso's
-native Unix filesystem I/O; FS uses the native `FsIo` adapter. Each trial uses
+`FULL` synchronous mode, and 256 KiB pager cache. Local disk uses Turso's native
+Unix filesystem I/O; FS uses the native `FsIo` adapter. Each trial uses
 fresh database paths and separate processes for seed, read, and transaction
 phases. Execution order alternates between trials.
 
@@ -146,15 +146,8 @@ a cold SSD. Local fsync protects this machine's filesystem; FS sync includes
 remote publication and has a different failure boundary. Preparation and final
 integrity checks are excluded from per-operation timing.
 
-For an A/B comparison with an earlier release-built bench executable:
-
-```bash
-python3 benchmark.py --baseline-binary /path/to/old/bench \
-  --phases seed transactions --trials 3 --output output/commit-comparison.json
-```
-
-Baseline and optimized runs use separate remote paths and alternate order.
-Binary hashes are recorded, and partial results are saved after every phase.
+The executable hash is recorded, and partial results are saved after every
+phase. FS and local-disk runs use separate paths and alternate order.
 
 The runners build release binaries. To reuse a build, set `TURSO_FS_BINARY` for
 `smoke.py` or `TURSO_FS_BENCH_BINARY` for `benchmark.py`. `CARGO_TARGET_DIR` is also
@@ -180,8 +173,7 @@ HTTP 409. It verifies no local database files appeared in its sandbox.
 
 The optional GitHub Actions template is in `ci/github-actions.yml`. To enable
 it, publish it as `.github/workflows/check.yml` using a GitHub credential with
-`workflow` permission. The credential used for this initial repository upload
-cannot install workflows, so Actions is not enabled yet.
+`workflow` permission.
 
 ## Current limits
 

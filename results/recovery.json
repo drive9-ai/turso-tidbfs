@@ -1,0 +1,17 @@
+{
+  "root": "/demos/turso/5dbf840678bb4e3a9f0c6a8f9f24ee67",
+  "checks": [
+    "committed transaction acknowledged, then SIGKILL with open transaction",
+    "fresh process recovers WAL; uncommitted row absent; integrity_check=ok",
+    "stale process rejected by remote manifest CAS (HTTP 409)",
+    "checkpoint/reopen preserves winning commit; no local database files"
+  ],
+  "pids": [
+    21574,
+    21590,
+    21603,
+    21606,
+    21633
+  ],
+  "elapsed_seconds": 24.13
+}
