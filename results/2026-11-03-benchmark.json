@@ -1,0 +1,1346 @@
+{
+  "recorded_at": "2026-11-03T01:49:30.765475+00:00",
+  "machine": "macOS-27.0.1-arm64-arm-64bit",
+  "turso_core": "0.8.3",
+  "build": "release",
+  "trials": 3,
+  "fs_host": "aws-us-east-1.drive9.ai",
+  "remote_root": "/demos/turso-bench/08dc9e299384455c9ebe9c7c2cba2e5f",
+  "runs": [
+    {
+      "backend": "local",
+      "http_total": null,
+      "mode": "read",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 0.619333,
+          "http_cumulative": null,
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.209084,
+          "ms_per_operation": 0.209084,
+          "name": "point_read_one",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.9948330000000001,
+          "ms_per_operation": 0.031088531250000002,
+          "name": "point_read_first_pass",
+          "operations": 32
+        },
+        {
+          "elapsed_ms": 1.221667,
+          "ms_per_operation": 0.0095442734375,
+          "name": "point_read_repeat",
+          "operations": 128
+        },
+        {
+          "elapsed_ms": 0.540042,
+          "ms_per_operation": 0.000527384765625,
+          "name": "full_scan",
+          "operations": 1024
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 1
+    },
+    {
+      "backend": "local",
+      "http_total": null,
+      "mode": "transactions",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 0.726666,
+          "http_cumulative": null,
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "commit_ms_samples": [
+            0.171292,
+            0.06870799999999999,
+            0.054833,
+            0.050917000000000004,
+            0.043166,
+            0.050708,
+            0.073833,
+            0.049499999999999995,
+            0.049,
+            0.043917,
+            0.056083,
+            0.058167
+          ],
+          "elapsed_ms": 0.770124,
+          "ms_per_operation": 0.064177,
+          "name": "single_row_commit",
+          "operations": 12,
+          "p50_ms": 0.054833,
+          "p95_ms": 0.171292,
+          "rows_per_transaction": 1,
+          "write_ms_samples": [
+            0.211667,
+            0.044167,
+            0.023541,
+            0.063041,
+            0.025667,
+            0.019708,
+            0.0305,
+            0.018583000000000002,
+            0.013,
+            0.016625,
+            0.01325,
+            0.020083
+          ]
+        },
+        {
+          "commit_ms_samples": [
+            0.067542,
+            0.148541,
+            0.08650000000000001,
+            0.10029199999999999,
+            0.0895,
+            0.0645
+          ],
+          "elapsed_ms": 0.556875,
+          "ms_per_operation": 0.0928125,
+          "name": "batch_32_commit",
+          "operations": 6,
+          "p50_ms": 0.0895,
+          "p95_ms": 0.148541,
+          "rows_per_transaction": 32,
+          "write_ms_samples": [
+            0.32675,
+            0.350375,
+            0.351375,
+            0.247125,
+            0.523458,
+            0.4765
+          ]
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 1
+    },
+    {
+      "backend": "fs",
+      "http_total": {
+        "downloaded_bytes": 611687,
+        "gets": 20,
+        "puts": 0,
+        "uploaded_bytes": 0
+      },
+      "mode": "read",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 584.620584,
+          "http_cumulative": {
+            "downloaded_bytes": 34151,
+            "gets": 2,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.189916,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 0,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.189916,
+          "name": "point_read_one",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 5938.573125,
+          "http": {
+            "downloaded_bytes": 557056,
+            "gets": 17,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 185.58041015625,
+          "name": "point_read_first_pass",
+          "operations": 32
+        },
+        {
+          "elapsed_ms": 2.373708,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 0,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.01854459375,
+          "name": "point_read_repeat",
+          "operations": 128
+        },
+        {
+          "elapsed_ms": 330.937125,
+          "http": {
+            "downloaded_bytes": 20480,
+            "gets": 1,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.3231807861328125,
+          "name": "full_scan",
+          "operations": 1024
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 1
+    },
+    {
+      "backend": "fs",
+      "http_total": {
+        "downloaded_bytes": 611687,
+        "gets": 48,
+        "puts": 49,
+        "uploaded_bytes": 596453
+      },
+      "mode": "transactions",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 571.678667,
+          "http_cumulative": {
+            "downloaded_bytes": 34151,
+            "gets": 2,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "commit_ms_samples": [
+            2308.997042,
+            1170.384542,
+            1572.544333,
+            1185.5785,
+            1311.6195,
+            1198.730125,
+            1224.997458,
+            1944.911791,
+            1140.445666,
+            1197.7894170000002,
+            1161.070667,
+            1167.221041
+          ],
+          "elapsed_ms": 16584.290082,
+          "ms_per_operation": 1382.0241735,
+          "name": "single_row_commit",
+          "operations": 12,
+          "p50_ms": 1198.730125,
+          "p95_ms": 2308.997042,
+          "rows_per_transaction": 1,
+          "write_ms_samples": [
+            0.194041,
+            0.331291,
+            0.188667,
+            0.12208299999999998,
+            0.121542,
+            0.126167,
+            0.198666,
+            0.144166,
+            0.174959,
+            0.18525,
+            0.412959,
+            0.172875
+          ]
+        },
+        {
+          "commit_ms_samples": [
+            1996.5041669999998,
+            1195.206917,
+            2068.726834,
+            1985.280542,
+            1186.49925,
+            1967.25675
+          ],
+          "elapsed_ms": 10399.474460000001,
+          "ms_per_operation": 1733.2457433333336,
+          "name": "batch_32_commit",
+          "operations": 6,
+          "p50_ms": 1985.280542,
+          "p95_ms": 2068.726834,
+          "rows_per_transaction": 32,
+          "write_ms_samples": [
+            1.1184999999999998,
+            631.584292,
+            0.7747090000000001,
+            572.723333,
+            572.047542,
+            0.8535
+          ]
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 1
+    },
+    {
+      "backend": "fs",
+      "http_total": {
+        "downloaded_bytes": 0,
+        "gets": 42,
+        "puts": 47,
+        "uploaded_bytes": 1250974
+      },
+      "mode": "seed",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 0.863459,
+          "http_cumulative": {
+            "downloaded_bytes": 0,
+            "gets": 1,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 9.343625,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 0,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.0091246337890625,
+          "name": "buffered_insert",
+          "operations": 1024
+        },
+        {
+          "elapsed_ms": 16646.431666,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 19,
+            "puts": 20,
+            "uploaded_bytes": 623604
+          },
+          "ms_per_operation": 16646.431666,
+          "name": "bulk_commit",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 16874.260334,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 19,
+            "puts": 21,
+            "uploaded_bytes": 614347
+          },
+          "ms_per_operation": 16874.260334,
+          "name": "checkpoint",
+          "operations": 1
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 2
+    },
+    {
+      "backend": "fs",
+      "http_total": {
+        "downloaded_bytes": 611687,
+        "gets": 20,
+        "puts": 0,
+        "uploaded_bytes": 0
+      },
+      "mode": "read",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 558.10725,
+          "http_cumulative": {
+            "downloaded_bytes": 34151,
+            "gets": 2,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 1.77625,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 0,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 1.77625,
+          "name": "point_read_one",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 5876.1357499999995,
+          "http": {
+            "downloaded_bytes": 557056,
+            "gets": 17,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 183.62924218749998,
+          "name": "point_read_first_pass",
+          "operations": 32
+        },
+        {
+          "elapsed_ms": 2.256125,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 0,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.0176259765625,
+          "name": "point_read_repeat",
+          "operations": 128
+        },
+        {
+          "elapsed_ms": 379.295416,
+          "http": {
+            "downloaded_bytes": 20480,
+            "gets": 1,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.3704056796875,
+          "name": "full_scan",
+          "operations": 1024
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 2
+    },
+    {
+      "backend": "fs",
+      "http_total": {
+        "downloaded_bytes": 611687,
+        "gets": 48,
+        "puts": 49,
+        "uploaded_bytes": 596453
+      },
+      "mode": "transactions",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 564.03675,
+          "http_cumulative": {
+            "downloaded_bytes": 34151,
+            "gets": 2,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "commit_ms_samples": [
+            2242.875959,
+            1285.671917,
+            1230.772958,
+            1192.323375,
+            1228.916083,
+            1254.495042,
+            1230.5241250000001,
+            1934.801958,
+            1107.682792,
+            1179.629708,
+            1168.539292,
+            1162.181958
+          ],
+          "elapsed_ms": 16218.415167,
+          "ms_per_operation": 1351.53459725,
+          "name": "single_row_commit",
+          "operations": 12,
+          "p50_ms": 1230.5241250000001,
+          "p95_ms": 2242.875959,
+          "rows_per_transaction": 1,
+          "write_ms_samples": [
+            0.416458,
+            0.20983300000000002,
+            0.26733300000000004,
+            0.20725,
+            0.309167,
+            0.176167,
+            0.278958,
+            0.1695,
+            0.33525,
+            0.192375,
+            0.289208,
+            0.168917
+          ]
+        },
+        {
+          "commit_ms_samples": [
+            1965.261583,
+            1188.739083,
+            2059.1351250000002,
+            2037.6005830000001,
+            1311.859417,
+            2108.322208
+          ],
+          "elapsed_ms": 10670.917999000001,
+          "ms_per_operation": 1778.4863331666668,
+          "name": "batch_32_commit",
+          "operations": 6,
+          "p50_ms": 2037.6005830000001,
+          "p95_ms": 2108.322208,
+          "rows_per_transaction": 32,
+          "write_ms_samples": [
+            0.833333,
+            649.498,
+            0.41825,
+            570.0470829999999,
+            561.2934160000001,
+            0.40045800000000004
+          ]
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 2
+    },
+    {
+      "backend": "local",
+      "http_total": null,
+      "mode": "seed",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 1.249042,
+          "http_cumulative": null,
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 4.549041,
+          "ms_per_operation": 0.0044424228515625,
+          "name": "buffered_insert",
+          "operations": 1024
+        },
+        {
+          "elapsed_ms": 0.46012499999999995,
+          "ms_per_operation": 0.46012499999999995,
+          "name": "bulk_commit",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.37270800000000004,
+          "ms_per_operation": 0.37270800000000004,
+          "name": "checkpoint",
+          "operations": 1
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 2
+    },
+    {
+      "backend": "local",
+      "http_total": null,
+      "mode": "read",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 0.7712910000000001,
+          "http_cumulative": null,
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.193542,
+          "ms_per_operation": 0.193542,
+          "name": "point_read_one",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.404583,
+          "ms_per_operation": 0.01264321875,
+          "name": "point_read_first_pass",
+          "operations": 32
+        },
+        {
+          "elapsed_ms": 0.8460829999999999,
+          "ms_per_operation": 0.006610023437499999,
+          "name": "point_read_repeat",
+          "operations": 128
+        },
+        {
+          "elapsed_ms": 0.30770800000000004,
+          "ms_per_operation": 0.00030049609375000004,
+          "name": "full_scan",
+          "operations": 1024
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 2
+    },
+    {
+      "backend": "local",
+      "http_total": null,
+      "mode": "transactions",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 0.653666,
+          "http_cumulative": null,
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "commit_ms_samples": [
+            0.17225000000000001,
+            0.06183400000000001,
+            0.042416999999999996,
+            0.044375,
+            0.07079099999999999,
+            0.060667,
+            0.058959000000000004,
+            0.061375,
+            0.056334,
+            0.048209,
+            0.045708,
+            0.045375
+          ],
+          "elapsed_ms": 0.768294,
+          "ms_per_operation": 0.0640245,
+          "name": "single_row_commit",
+          "operations": 12,
+          "p50_ms": 0.058959000000000004,
+          "p95_ms": 0.17225000000000001,
+          "rows_per_transaction": 1,
+          "write_ms_samples": [
+            0.166333,
+            0.023459,
+            0.019666,
+            0.017,
+            0.035084,
+            0.026208000000000002,
+            0.017042,
+            0.018625,
+            0.013708,
+            0.013415999999999999,
+            0.015458,
+            0.013875
+          ]
+        },
+        {
+          "commit_ms_samples": [
+            0.119417,
+            0.08712500000000001,
+            0.059667000000000005,
+            0.062916,
+            0.053458000000000006,
+            0.092542
+          ],
+          "elapsed_ms": 0.475125,
+          "ms_per_operation": 0.07918750000000001,
+          "name": "batch_32_commit",
+          "operations": 6,
+          "p50_ms": 0.08712500000000001,
+          "p95_ms": 0.119417,
+          "rows_per_transaction": 32,
+          "write_ms_samples": [
+            0.269625,
+            0.243458,
+            0.23825,
+            0.242917,
+            0.229958,
+            0.300625
+          ]
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 2
+    },
+    {
+      "backend": "local",
+      "http_total": null,
+      "mode": "seed",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 0.621167,
+          "http_cumulative": null,
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 3.4282079999999997,
+          "ms_per_operation": 0.0033478593749999997,
+          "name": "buffered_insert",
+          "operations": 1024
+        },
+        {
+          "elapsed_ms": 0.48875,
+          "ms_per_operation": 0.48875,
+          "name": "bulk_commit",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.281334,
+          "ms_per_operation": 0.281334,
+          "name": "checkpoint",
+          "operations": 1
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 3
+    },
+    {
+      "backend": "local",
+      "http_total": null,
+      "mode": "read",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 0.7093750000000001,
+          "http_cumulative": null,
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.174625,
+          "ms_per_operation": 0.174625,
+          "name": "point_read_one",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.51875,
+          "ms_per_operation": 0.0162109375,
+          "name": "point_read_first_pass",
+          "operations": 32
+        },
+        {
+          "elapsed_ms": 0.761917,
+          "ms_per_operation": 0.0059524765625,
+          "name": "point_read_repeat",
+          "operations": 128
+        },
+        {
+          "elapsed_ms": 0.811417,
+          "ms_per_operation": 0.0007923994140625,
+          "name": "full_scan",
+          "operations": 1024
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 3
+    },
+    {
+      "backend": "local",
+      "http_total": null,
+      "mode": "transactions",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 0.7585,
+          "http_cumulative": null,
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "commit_ms_samples": [
+            0.217416,
+            0.063417,
+            0.06224999999999999,
+            0.142125,
+            0.0815,
+            0.070666,
+            0.06679199999999999,
+            0.06387499999999999,
+            0.082334,
+            0.055,
+            0.072875,
+            0.055791999999999994
+          ],
+          "elapsed_ms": 1.0340420000000001,
+          "ms_per_operation": 0.08617016666666667,
+          "name": "single_row_commit",
+          "operations": 12,
+          "p50_ms": 0.070666,
+          "p95_ms": 0.217416,
+          "rows_per_transaction": 1,
+          "write_ms_samples": [
+            0.17625,
+            0.032833,
+            0.015917,
+            0.033624999999999995,
+            0.021458,
+            0.016958,
+            0.014916,
+            0.018333,
+            0.013083,
+            0.011165999999999999,
+            0.010959,
+            0.009041
+          ]
+        },
+        {
+          "commit_ms_samples": [
+            0.119875,
+            0.06741699999999999,
+            0.07258300000000001,
+            0.08725000000000001,
+            0.093834,
+            0.074625
+          ],
+          "elapsed_ms": 0.515584,
+          "ms_per_operation": 0.08593066666666667,
+          "name": "batch_32_commit",
+          "operations": 6,
+          "p50_ms": 0.08725000000000001,
+          "p95_ms": 0.119875,
+          "rows_per_transaction": 32,
+          "write_ms_samples": [
+            0.256125,
+            0.24641700000000002,
+            0.24816699999999997,
+            0.279458,
+            0.247916,
+            0.33808299999999997
+          ]
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 3
+    },
+    {
+      "backend": "fs",
+      "http_total": {
+        "downloaded_bytes": 0,
+        "gets": 42,
+        "puts": 47,
+        "uploaded_bytes": 1250974
+      },
+      "mode": "seed",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 0.475541,
+          "http_cumulative": {
+            "downloaded_bytes": 0,
+            "gets": 1,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 24.636125,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 0,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.0240587158203125,
+          "name": "buffered_insert",
+          "operations": 1024
+        },
+        {
+          "elapsed_ms": 15436.925125,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 19,
+            "puts": 20,
+            "uploaded_bytes": 623604
+          },
+          "ms_per_operation": 15436.925125,
+          "name": "bulk_commit",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 16120.573624999999,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 19,
+            "puts": 21,
+            "uploaded_bytes": 614347
+          },
+          "ms_per_operation": 16120.573624999999,
+          "name": "checkpoint",
+          "operations": 1
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 3
+    },
+    {
+      "backend": "fs",
+      "http_total": {
+        "downloaded_bytes": 611687,
+        "gets": 20,
+        "puts": 0,
+        "uploaded_bytes": 0
+      },
+      "mode": "read",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 577.43275,
+          "http_cumulative": {
+            "downloaded_bytes": 34151,
+            "gets": 2,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.214,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 0,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.214,
+          "name": "point_read_one",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 6014.0421670000005,
+          "http": {
+            "downloaded_bytes": 557056,
+            "gets": 17,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 187.93881771875002,
+          "name": "point_read_first_pass",
+          "operations": 32
+        },
+        {
+          "elapsed_ms": 1.331667,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 0,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.0104036484375,
+          "name": "point_read_repeat",
+          "operations": 128
+        },
+        {
+          "elapsed_ms": 339.888292,
+          "http": {
+            "downloaded_bytes": 20480,
+            "gets": 1,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.33192216015625,
+          "name": "full_scan",
+          "operations": 1024
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 3
+    },
+    {
+      "backend": "fs",
+      "http_total": {
+        "downloaded_bytes": 611687,
+        "gets": 48,
+        "puts": 49,
+        "uploaded_bytes": 596453
+      },
+      "mode": "transactions",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 570.373208,
+          "http_cumulative": {
+            "downloaded_bytes": 34151,
+            "gets": 2,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "commit_ms_samples": [
+            2317.193375,
+            1245.481416,
+            1181.713667,
+            1223.680625,
+            1230.5618339999999,
+            1229.0817089999998,
+            1214.963125,
+            1960.293292,
+            1174.8866659999999,
+            1167.498417,
+            1186.984875,
+            1314.7530000000002
+          ],
+          "elapsed_ms": 16447.092001,
+          "ms_per_operation": 1370.5910000833335,
+          "name": "single_row_commit",
+          "operations": 12,
+          "p50_ms": 1229.0817089999998,
+          "p95_ms": 2317.193375,
+          "rows_per_transaction": 1,
+          "write_ms_samples": [
+            0.423,
+            0.185666,
+            0.202375,
+            0.150583,
+            0.214875,
+            0.27754199999999996,
+            0.152458,
+            0.09929199999999999,
+            0.194166,
+            0.181084,
+            0.15312499999999998,
+            0.245166
+          ]
+        },
+        {
+          "commit_ms_samples": [
+            1964.077125,
+            1254.842834,
+            1986.688333,
+            1977.015583,
+            1208.208458,
+            2046.814833
+          ],
+          "elapsed_ms": 10437.647166,
+          "ms_per_operation": 1739.6078610000002,
+          "name": "batch_32_commit",
+          "operations": 6,
+          "p50_ms": 1977.015583,
+          "p95_ms": 2046.814833,
+          "rows_per_transaction": 32,
+          "write_ms_samples": [
+            0.75875,
+            567.706625,
+            0.559791,
+            636.330917,
+            643.87225,
+            1.494958
+          ]
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 3
+    },
+    {
+      "backend": "local",
+      "http_total": null,
+      "mode": "seed",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 3.726375,
+          "http_cumulative": null,
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 6.853042,
+          "ms_per_operation": 0.006692423828125,
+          "name": "buffered_insert",
+          "operations": 1024
+        },
+        {
+          "elapsed_ms": 0.474584,
+          "ms_per_operation": 0.474584,
+          "name": "bulk_commit",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.464458,
+          "ms_per_operation": 0.464458,
+          "name": "checkpoint",
+          "operations": 1
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": "replacement_seed"
+    },
+    {
+      "backend": "fs",
+      "http_total": {
+        "downloaded_bytes": 0,
+        "gets": 42,
+        "puts": 47,
+        "uploaded_bytes": 1250974
+      },
+      "mode": "seed",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 0.8470409999999999,
+          "http_cumulative": {
+            "downloaded_bytes": 0,
+            "gets": 1,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 9.279334,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 0,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.009061849609375,
+          "name": "buffered_insert",
+          "operations": 1024
+        },
+        {
+          "elapsed_ms": 15429.326792,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 19,
+            "puts": 20,
+            "uploaded_bytes": 623604
+          },
+          "ms_per_operation": 15429.326792,
+          "name": "bulk_commit",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 15880.769291,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 19,
+            "puts": 21,
+            "uploaded_bytes": 614347
+          },
+          "ms_per_operation": 15880.769291,
+          "name": "checkpoint",
+          "operations": 1
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": "replacement_seed"
+    }
+  ],
+  "notes": [
+    "Same Turso engine and SQL; synchronous=FULL, WAL, auto-checkpoint disabled.",
+    "Each phase runs in a separate process; adapter/pager caches start empty in read phase.",
+    "OS disk caches are not dropped; local results include normal OS caching.",
+    "FS commit includes remote durability; local commit covers this machine's filesystem only.",
+    "HTTP preparation and full integrity checks are outside per-operation timing.",
+    "Single-row and batch commit samples are sequential, not concurrent.",
+    "The first local/FS seed pair overlapped the separate crash smoke. It was excluded and replaced with an isolated seed pair. Every summary group retains three samples; read/transaction trials are unchanged.",
+    "The one-point query targets id=0 and hits the block read by engine open; it is not a cold network lookup. The distributed pass touches 17 additional blocks. Full scan follows these reads and is mostly cached."
+  ],
+  "local_storage": "temporary directory on host filesystem (not tmpfs on macOS)",
+  "summary": [
+    {
+      "name": "point_read_one",
+      "local_ms": 0.193542,
+      "fs_ms": 0.214,
+      "fs_over_local": 1.1057031548707774
+    },
+    {
+      "name": "point_read_first_pass",
+      "local_ms": 0.0162109375,
+      "fs_ms": 185.58041015625,
+      "fs_over_local": 11447.851807228915
+    },
+    {
+      "name": "point_read_repeat",
+      "local_ms": 0.006610023437499999,
+      "fs_ms": 0.0176259765625,
+      "fs_over_local": 2.666552808648797
+    },
+    {
+      "name": "full_scan",
+      "local_ms": 0.000527384765625,
+      "fs_ms": 0.33192216015625,
+      "fs_over_local": 629.3738116664999
+    },
+    {
+      "name": "single_row_commit",
+      "local_ms": 0.064177,
+      "fs_ms": 1370.5910000833335,
+      "fs_over_local": 21356.42052578546
+    },
+    {
+      "name": "batch_32_commit",
+      "local_ms": 0.08593066666666667,
+      "fs_ms": 1739.6078610000002,
+      "fs_over_local": 20244.31938539598
+    },
+    {
+      "name": "buffered_insert",
+      "local_ms": 0.0044424228515625,
+      "fs_ms": 0.0091246337890625,
+      "fs_over_local": 2.05397687116911
+    },
+    {
+      "name": "bulk_commit",
+      "local_ms": 0.474584,
+      "fs_ms": 15436.925125,
+      "fs_over_local": 32527.27678345667
+    },
+    {
+      "name": "checkpoint",
+      "local_ms": 0.37270800000000004,
+      "fs_ms": 16120.573624999999,
+      "fs_over_local": 43252.55595533232
+    }
+  ],
+  "excluded_runs": [
+    {
+      "backend": "local",
+      "http_total": null,
+      "mode": "seed",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 3.3018330000000002,
+          "http_cumulative": null,
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 6.4600409999999995,
+          "ms_per_operation": 0.0063086337890624995,
+          "name": "buffered_insert",
+          "operations": 1024
+        },
+        {
+          "elapsed_ms": 0.391083,
+          "ms_per_operation": 0.391083,
+          "name": "bulk_commit",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 0.378292,
+          "ms_per_operation": 0.378292,
+          "name": "checkpoint",
+          "operations": 1
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 1
+    },
+    {
+      "backend": "fs",
+      "http_total": {
+        "downloaded_bytes": 0,
+        "gets": 42,
+        "puts": 47,
+        "uploaded_bytes": 1250974
+      },
+      "mode": "seed",
+      "pager_cache_kib": 256,
+      "payload_bytes": 512,
+      "phases": [
+        {
+          "elapsed_ms": 1.287667,
+          "http_cumulative": {
+            "downloaded_bytes": 0,
+            "gets": 1,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "name": "open_engine",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 11.176874999999999,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 0,
+            "puts": 0,
+            "uploaded_bytes": 0
+          },
+          "ms_per_operation": 0.010914916992187499,
+          "name": "buffered_insert",
+          "operations": 1024
+        },
+        {
+          "elapsed_ms": 15577.6205,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 19,
+            "puts": 20,
+            "uploaded_bytes": 623604
+          },
+          "ms_per_operation": 15577.6205,
+          "name": "bulk_commit",
+          "operations": 1
+        },
+        {
+          "elapsed_ms": 15876.417667,
+          "http": {
+            "downloaded_bytes": 0,
+            "gets": 19,
+            "puts": 21,
+            "uploaded_bytes": 614347
+          },
+          "ms_per_operation": 15876.417667,
+          "name": "checkpoint",
+          "operations": 1
+        }
+      ],
+      "rows": 1024,
+      "synchronous": "FULL",
+      "trial": 1
+    }
+  ],
+  "replacement_seed_root": "/demos/turso-bench/24df3c73b6b342b9a56edf4ffa33c75d",
+  "local_filesystem": "APFS on local macOS host; normal OS caches retained"
+}
